@@ -151,15 +151,21 @@ data yourself.
 3. **The old key file goes.** v5 wrote TSIG keys into
    `<conf dir>/auth_transfer.conf`. v6 writes `<conf dir>/tsig-keys.conf`
    (`0640 root:named`). Delete the old file.
-4. **Roll out in this order.**
+4. **Upgrade the primary first, then the secondaries.**
    1. Run the role with `--check --diff` against everything.
-   2. Upgrade one secondary.
-   3. Check it with `dig @<secondary> <zone> SOA`: the `aa` flag set and the
-      primary's serial.
-   4. Upgrade the other secondaries, then the primary.
+   2. Upgrade the primary. Until they are upgraded, v5 secondaries may fail
+      to refresh (for example when you add TSIG keys or tighten
+      `allow_transfer`), but they keep answering from the copy they hold
+      until the zone's SOA expire time.
+   3. Upgrade the secondaries, well within that expire time. Running the role
+      against all servers in one play does both steps together.
+   4. Check each secondary with `dig @<secondary> <zone> SOA`: the `aa` flag
+      set and the primary's serial.
 
-   Secondaries keep serving the zones they already hold while the primary is
-   upgraded.
+   Do not upgrade a secondary first. Its v6 transfer settings may not match
+   what the v5 primary allows, and on EL it starts from the new, empty
+   `/var/named/slaves`, so it would have nothing to serve until the primary
+   is upgraded.
 5. **Check transfers.** On the primary, `dig @127.0.0.1 <zone> AXFR` should
    now fail unless 127.0.0.1 is allowed, and a transfer signed with the key
    from a secondary should succeed.
