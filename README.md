@@ -369,6 +369,11 @@ bind_zones:
 - Keep the TSIG key. TLS hides the zone and proves which server is the
   primary; the key proves which servers may transfer.
 - NOTIFY stays on plain DNS, signed with the key as before.
+- When a secondary cannot connect to a primary, BIND remembers that primary
+  as unreachable and skips transfers from it, NOTIFY included, for minutes
+  (the log says `is unreachable (cached)`). This happens when the secondary
+  is configured before the primary's DoT listener exists, so configure the
+  primary first. Restarting named on the secondary clears it at once.
 
 ### Clients
 

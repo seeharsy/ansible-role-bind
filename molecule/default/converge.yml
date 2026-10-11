@@ -1,5 +1,14 @@
 ---
-- name: Converge
-  hosts: bind
+# Primary first, as MIGRATION.md recommends. If a secondary comes up while
+# the primary has no DoT listener yet (Debian starts named with its default
+# configuration on install), BIND caches the primary as unreachable on port
+# 853 and skips transfers from it, NOTIFY included, for minutes.
+- name: Converge the primary
+  hosts: primary
+  roles:
+    - role: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') | basename }}"
+
+- name: Converge the secondaries
+  hosts: secondary
   roles:
     - role: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') | basename }}"

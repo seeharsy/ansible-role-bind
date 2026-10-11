@@ -157,8 +157,11 @@ data yourself.
       to refresh (for example when you add TSIG keys or tighten
       `allow_transfer`), but they keep answering from the copy they hold
       until the zone's SOA expire time.
-   3. Upgrade the secondaries, well within that expire time. Running the role
-      against all servers in one play does both steps together.
+   3. Upgrade the secondaries, well within that expire time. Use a separate
+      play or run for them, after the primary's has finished: a secondary
+      that tries the primary while named there is still starting or has no
+      DoT listener yet stops transferring from it for minutes (see "Zone
+      transfers over TLS" in the README).
    4. Check each secondary with `dig @<secondary> <zone> SOA`: the `aa` flag
       set and the primary's serial.
 

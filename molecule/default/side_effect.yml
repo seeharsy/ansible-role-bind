@@ -15,9 +15,31 @@
   gather_facts: false
   tasks:
     - name: Wait for the new record on the secondary
-      ansible.builtin.command: dig +short +norec @127.0.0.1 added.example.test A
-      register: added
-      changed_when: false
-      until: added.stdout == '192.0.2.99'
-      retries: 15
-      delay: 2
+      block:
+        - name: Query the secondary until the record appears
+          ansible.builtin.command: dig +short +norec @127.0.0.1 added.example.test A
+          register: added
+          changed_when: false
+          until: added.stdout == '192.0.2.99'
+          retries: 15
+          delay: 2
+      rescue:
+        - name: Read named's log on both servers
+          ansible.builtin.command:
+            argv: [grep, -shE, 'example\.test|notify|TLS', /var/named/data/named.run, /var/cache/bind/data/named.run]
+          register: named_log
+          changed_when: false
+          failed_when: false
+          delegate_to: "{{ item }}"
+          loop: "{{ groups['bind'] }}"
+
+        - name: Show the end of each log
+          ansible.builtin.debug:
+            msg: "{{ item.stdout_lines[-40:] }}"
+          loop: "{{ named_log.results }}"
+          loop_control:
+            label: "{{ item.item }}"
+
+        - name: Fail the check
+          ansible.builtin.fail:
+            msg: added.example.test did not reach the secondary; see the logs above.
