@@ -1,6 +1,18 @@
 # Ansible role BIND
 
-[![Actions Status](https://github.com/bertvv/ansible-role-bind/workflows/CI/badge.svg)](https://github.com/bertvv/ansible-role-bind/actions)
+[![CI](https://github.com/seeharsy/ansible-role-bind/actions/workflows/ci.yml/badge.svg)](https://github.com/seeharsy/ansible-role-bind/actions/workflows/ci.yml)
+
+> **Maintained continuation.** This repository continues
+> [bertvv/ansible-role-bind](https://github.com/bertvv/ansible-role-bind), which
+> has had no merges since 2021. Many thanks to Bert Van Vreckem and every
+> upstream contributor; the full upstream history is preserved here.
+>
+> **v6 is under development and is a breaking release.** It targets BIND 9.18+
+> on EL 9/10, Debian 12/13 and Ubuntu 24.04, and adds DNS over TLS/HTTPS and
+> zone transfers over TLS. A migration guide will accompany the release. The
+> documentation below still describes v5 until then.
+>
+> Issues and pull requests belong here, not upstream.
 
 An Ansible role for setting up ISC BIND as an **authoritative-only** DNS server for multiple domains. Specifically, the responsibilities of this role are to:
 

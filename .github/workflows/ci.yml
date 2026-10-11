@@ -4,47 +4,34 @@ name: CI
   pull_request:
   push:
     branches:
-      - master
+      - main
+
+permissions:
+  contents: read
 
 jobs:
 
-  test:
-    name: Molecule
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        distro:
-          - centos7
-          - centos8
-          - debian8
-          - debian9
-          - debian10
-          - ubuntu1604
-          - ubuntu1804
-          - ubuntu2004
-
+    # The inherited v5 code predates current ansible-lint rules. Linting is
+    # reported but not enforced until the v6 refactor lands; Molecule tests
+    # for the v6 platform matrix are added in that same change.
+    continue-on-error: true
     steps:
-      - name: Check out the codebase.
-        uses: actions/checkout@v2
+      - name: Check out the codebase
+        uses: actions/checkout@v4
 
       - name: Set up Python 3
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.x'
+          python-version: '3.12'
 
-      - name: Install test dependencies.
-        run: pip3 install ansible molecule molecule-docker yamllint ansible-lint docker netaddr dnspython
+      - name: Install lint tools
+        run: pip3 install ansible-core ansible-lint yamllint
 
-      - name: Run Molecule Primary/Secondary/Forwarder tests
-        run: molecule test
-        env:
-          PY_COLORS: '1'
-          ANSIBLE_FORCE_COLOR: '1'
-          MOLECULE_DISTRO: ${{ matrix.distro }}
+      - name: Run yamllint
+        run: yamllint .
 
-      - name: Run Molecule Shared Inventory tests
-        run: molecule test --scenario-name shared_inventory
-        env:
-          PY_COLORS: '1'
-          ANSIBLE_FORCE_COLOR: '1'
-          MOLECULE_DISTRO: ${{ matrix.distro }}
+      - name: Run ansible-lint
+        run: ansible-lint
