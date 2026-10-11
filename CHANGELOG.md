@@ -10,6 +10,10 @@ This file adheres to the guidelines of [http://keepachangelog.com/](http://keepa
 
 - `bind_remove_stale_files` (default `true`): removes zone files the role wrote for zones that are no longer configured, and v5's leftovers (`auth_transfer.conf`, v5 zone files, the EL v5 secondary directory). Only files carrying the role's `; Hash:` header are treated as zone files.
 
+### Security
+
+- Zone file hashes are read from `grep -Z` output and accepted only for files directly inside the zone directory with valid zone names. In 6.0.0 a file name containing newlines, created by anyone able to write to the zone directory (the named group), could forge the previous hash or serial of a zone.
+
 ### Fixed
 
 - MIGRATION.md: upgrade the primary before the secondaries, in a separate run, and no longer suggests one play for all servers.

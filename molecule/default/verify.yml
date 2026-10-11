@@ -435,6 +435,8 @@
       - /var/cache/bind/example.test
     v5_kept:
       - "{{ v5_dir }}/not-ours.zone"
+      - /root/canary
+      - /canary
   tasks:
     - name: Look for each path
       ansible.builtin.stat:

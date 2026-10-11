@@ -89,5 +89,13 @@
           content: "v5 secondary copy\n"
         - path: "{{ v5_dir }}/not-ours.zone"
           content: "; written by something else\n"
+        # A name with newlines that would forge a "canary:; Hash:" record if
+        # the role parsed plain grep output; the canaries must survive.
+        - path: "{{ v5_dir }}/x\ncanary:; Hash: 00 1\nz"
+          content: "; Hash: 0123456789abcdef0123456789abcdef 1791680000\n"
+        - path: /root/canary
+          content: "must survive\n"
+        - path: /canary
+          content: "must survive\n"
       loop_control:
         label: "{{ item.path }}"

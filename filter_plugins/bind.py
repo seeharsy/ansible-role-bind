@@ -508,26 +508,36 @@ def content_hash(data):
     return hashlib.sha256(json.dumps(data, sort_keys=True, default=str).encode()).hexdigest()
 
 
-def _hash_headers(lines):
-    """Yield (path, hash, serial) from `grep -H '^; Hash:'` output."""
+def _hash_headers(lines, dirs):
+    """Yield (path, hash, serial) from `grep -sHZ '^; Hash:'` output.
+
+    grep -Z ends each file name with a NUL byte, which no file name can
+    contain, so a crafted name (with newlines or colons) cannot forge a
+    record. Records are accepted only for files directly inside one of
+    dirs whose name is a valid zone file name.
+    """
+    dirs = {str(d).rstrip("/") for d in _as_list(dirs)}
     for line in _as_list(lines):
-        path, sep, header = str(line).partition(":")
+        path, sep, header = str(line).partition("\0")
         fields = header.split()
         if not sep or len(fields) != 4 or fields[:2] != [";", "Hash:"] or not fields[3].isdigit():
+            continue
+        directory, _, name = path.rpartition("/")
+        if directory.rstrip("/") not in dirs or not _SAFE_ZONE_NAME.match(name):
             continue
         yield path, fields[2], int(fields[3])
 
 
-def parse_hashes(lines):
-    """Parse `grep -H '^; Hash:'` output into {zone file name: {hash, serial}}."""
+def parse_hashes(lines, directory):
+    """Map zone file name to {hash, serial} for files in directory."""
     return {os.path.basename(path): {"hash": h, "serial": serial}
-            for path, h, serial in _hash_headers(lines)}
+            for path, h, serial in _hash_headers(lines, [directory])}
 
 
-def stale_zone_files(lines, keep):
-    """Zone files written by this role (v5 or v6) that it no longer manages."""
+def stale_zone_files(lines, keep, dirs):
+    """Zone files written by this role (v5 or v6) in dirs that it no longer manages."""
     keep = set(_as_list(keep))
-    return sorted({path for path, _, _ in _hash_headers(lines) if path not in keep})
+    return sorted({path for path, _, _ in _hash_headers(lines, dirs) if path not in keep})
 
 
 def zones_with_role(zones, inventory_hostname, role):
