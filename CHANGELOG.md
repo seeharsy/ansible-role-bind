@@ -4,10 +4,12 @@ This file contains al notable changes to the bind Ansible role.
 
 This file adheres to the guidelines of [http://keepachangelog.com/](http://keepachangelog.com/). Versioning follows [Semantic Versioning](http://semver.org/).  "GH-X" refers to the X'th issue/pull request on the Github project.
 
-## 6.0.0 - unreleased
+## 6.0.0 - 2026-10-11
 
-A rewrite for BIND 9.18+ and current ansible-core. **Breaking:** variable
-names and structure changed; see the README until the migration guide lands.
+A rewrite for BIND 9.18+ and current ansible-core, maintained in this fork.
+**Breaking:** variable names and structure changed; see
+[MIGRATION.md](MIGRATION.md). "GH-X" in this entry refers to issues and pull
+requests on the original bertvv/ansible-role-bind project.
 
 ### Added
 
@@ -54,7 +56,9 @@ names and structure changed; see the README until the migration guide lands.
 
 ### Removed
 
-- Zone type auto-detection by IP address, `create_reverse_zones`, `networks`, `ipv6_networks`, `mail_servers`, `services`, `text`, `caa`, `naptr`, `delegate`, `bind_python_version`.
+- Zone type auto-detection by IP address, `create_reverse_zones`, `create_forward_zones`, `networks`, `ipv6_networks`, `mail_servers`, `services`, `text`, `caa`, `naptr`, `delegate`, `other_name_servers`, `allow_update`, host `sshfp` and DNAME aliases. Use `reverse_zones`, `records` and `update_policy` instead.
+- `bind_key_mapping`, `bind_dnssec_enable`, `bind_rrset_order`, `bind_check_names`, `bind_dns64`, `bind_dns64_clients`, `bind_log`, `bind_other_logs`, `bind_zone_file_mode`, `bind_python_version`.
+- The automatic A record for the server in zones without hosts.
 - Arch Linux, FreeBSD, CentOS 7/8, Debian 8-11 and Ubuntu before 24.04.
 
 ## 5.1.0 - 2020-09-17

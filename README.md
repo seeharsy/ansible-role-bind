@@ -8,8 +8,8 @@
 > upstream contributor; the full upstream history is preserved here.
 > Issues and pull requests belong here, not upstream.
 >
-> **v6 is a breaking release** and is still in development. Variable names and
-> structure have changed; a migration guide will ship with v6.0.0.
+> **v6 is a breaking release.** Variable names and structure changed; upgrading
+> from v5 is covered in [MIGRATION.md](MIGRATION.md).
 
 Sets up ISC BIND 9.18 or later as an authoritative server, a recursive
 resolver, or both:
