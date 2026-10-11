@@ -5,6 +5,7 @@
     __bind_secondary_zones: "{{ bind_zones | bind_zones_with_role(inventory_hostname, 'secondary') }}"
     __bind_forward_zones: "{{ bind_zones | bind_zones_with_role(inventory_hostname, 'forward') }}"
     __bind_server_keys: "{{ bind_zones | bind_server_keys(inventory_hostname) }}"
+    __bind_tls_clients: "{{ bind_zones | bind_tls_clients(inventory_hostname) }}"
 
 - name: Sort this host's zone files
   ansible.builtin.set_fact:
@@ -56,6 +57,76 @@
     path: "{{ __bind_keys_file }}"
     state: absent
   when: bind_tsig_keys | length == 0
+  notify: Reload BIND
+
+- name: Create the TLS directory
+  ansible.builtin.file:
+    path: "{{ __bind_tls_dir }}"
+    state: directory
+    owner: root
+    group: "{{ bind_group }}"
+    mode: "0750"
+  when: __bind_tls.cert is defined or __bind_tls.key is defined or __bind_tls.ca is defined
+
+- name: Write TLS certificates
+  ansible.builtin.copy:
+    content: "{{ __bind_tls[item.var] | trim }}\n"
+    dest: "{{ item.path }}"
+    owner: root
+    group: "{{ bind_group }}"
+    mode: "0640"
+    setype: named_conf_t
+  loop:
+    - {var: cert, path: "{{ __bind_tls_dir }}/server.pem"}
+    - {var: ca, path: "{{ __bind_tls_dir }}/ca.pem"}
+  loop_control:
+    label: "{{ item.path }}"
+  when: __bind_tls[item.var] is defined
+  notify: Reload BIND
+
+- name: Write the TLS private key
+  ansible.builtin.copy:
+    content: "{{ __bind_tls.key | trim }}\n"
+    dest: "{{ __bind_tls_dir }}/server.key"
+    owner: root
+    group: "{{ bind_group }}"
+    mode: "0640"
+    setype: named_conf_t
+  no_log: true
+  diff: false
+  when: __bind_tls.key is defined
+  notify: Reload BIND
+
+- name: Remove TLS files that are no longer configured
+  ansible.builtin.file:
+    path: "{{ __bind_tls_dir }}/{{ item.file }}"
+    state: absent
+  loop:
+    - {var: cert, file: server.pem}
+    - {var: key, file: server.key}
+    - {var: ca, file: ca.pem}
+  loop_control:
+    label: "{{ item.file }}"
+  when: __bind_tls[item.var] is not defined
+  notify: Reload BIND
+
+# 443 is an HTTP port to SELinux; 853 is already a DNS port.
+- name: Check whether named may listen on HTTP ports
+  ansible.builtin.command: getsebool named_tcp_bind_http_port
+  register: __bind_http_port_bool
+  changed_when: false
+  check_mode: false
+  when:
+    - ansible_facts['os_family'] == 'RedHat'
+    - ansible_facts['selinux']['status'] | default('disabled') == 'enabled'
+    - __bind_doh.enabled
+
+- name: Let named listen on HTTP ports for DoH
+  ansible.builtin.command: setsebool -P named_tcp_bind_http_port on
+  changed_when: true
+  when:
+    - __bind_http_port_bool is not skipped
+    - __bind_http_port_bool.stdout is search('--> off')
   notify: Reload BIND
 
 - name: Read hashes of existing zone files

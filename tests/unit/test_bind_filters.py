@@ -580,3 +580,102 @@ class TestKeyReferences:
     def test_key_checks_are_skipped_without_key_names(self):
         zone = {"name": "a.test", "primary": "ns1", "primaries": [{"address": "192.0.2.1", "key": "nope"}]}
         assert bind.validate_zones([zone], "ns2")
+
+
+# --- zone transfers over TLS --------------------------------------------------
+
+def _xot_zone(**extra):
+    zone = {
+        "name": "a.test", "primary": "ns1", "name_servers": ["ns1"], "xot": True,
+        "allow_transfer": ["key xfer"],
+        "primaries": [{"address": "192.0.2.1", "key": "xfer", "tls_name": "ns1.a.test"}],
+    }
+    zone.update(extra)
+    return zone
+
+
+class TestXot:
+    def test_valid_xot_zone_passes(self):
+        assert bind.validate_zones([_xot_zone()], "ns2")
+
+    def test_xot_primaries_need_tls_name(self):
+        zone = _xot_zone(primaries=[{"address": "192.0.2.1", "key": "xfer"}])
+        with pytest.raises(AnsibleFilterError, match="tls_name"):
+            bind.validate_zones([zone], "ns2")
+
+    def test_xot_plain_string_primary_is_rejected(self):
+        with pytest.raises(AnsibleFilterError, match="tls_name"):
+            bind.validate_zones([_xot_zone(primaries=["192.0.2.1"])], "ns2")
+
+    def test_xot_primary_needs_allow_transfer(self):
+        zone = _xot_zone()
+        del zone["allow_transfer"]
+        with pytest.raises(AnsibleFilterError, match="allow_transfer"):
+            bind.validate_zones([zone], "ns1")
+
+    def test_invalid_tls_name_is_rejected(self):
+        zone = _xot_zone(primaries=[{"address": "192.0.2.1", "tls_name": 'ns1"; }; x'}])
+        with pytest.raises(AnsibleFilterError, match="not a valid name"):
+            bind.validate_zones([zone], "ns2")
+
+    def test_reverse_zone_inherits_xot(self):
+        zone = _xot_zone(reverse_zones=["192.0.2.0/24"])
+        assert bind.reverse_zones([zone])[0]["xot"] is True
+
+    def test_shared_cidr_with_different_xot_is_an_error(self):
+        a = _xot_zone(reverse_zones=["192.0.2.0/24"])
+        b = _xot_zone(name="b.test", xot=False, reverse_zones=["192.0.2.0/24"])
+        with pytest.raises(AnsibleFilterError, match="xot"):
+            bind.reverse_zones([a, b])
+
+    def test_tls_clients_on_secondary(self):
+        zones = [_xot_zone(), _xot_zone(name="b.test")]
+        assert bind.tls_clients(zones, "ns2") == ["ns1.a.test"]
+
+    def test_tls_clients_on_primary_is_empty(self):
+        assert bind.tls_clients([_xot_zone()], "ns1") == []
+
+
+# --- TLS listeners ------------------------------------------------------------
+
+class TestValidateTls:
+    TLS = {"cert": "-----BEGIN CERTIFICATE-----", "key": "-----BEGIN PRIVATE KEY-----"}
+
+    def check(self, zones=(), host="ns1", tls=None, dot=None, doh=None):
+        return bind.validate_tls(list(zones), host, tls if tls is not None else self.TLS,
+                                 dot or {"enabled": True}, doh or {"enabled": False})
+
+    def test_valid_settings_pass(self):
+        assert self.check()
+
+    def test_nothing_enabled_needs_nothing(self):
+        assert bind.validate_tls([], "ns1", {}, {"enabled": False}, {"enabled": False})
+
+    def test_listener_needs_a_certificate(self):
+        with pytest.raises(AnsibleFilterError, match="certificate"):
+            self.check(tls={})
+
+    def test_content_and_file_together_is_an_error(self):
+        with pytest.raises(AnsibleFilterError, match="cert or cert_file"):
+            self.check(tls={**self.TLS, "cert_file": "/etc/pki/x.pem"})
+
+    def test_relative_file_path_is_an_error(self):
+        with pytest.raises(AnsibleFilterError, match="absolute"):
+            self.check(tls={"cert_file": "x.pem", "key_file": "/k.pem"})
+
+    @pytest.mark.parametrize("endpoint", ["dns-query", "/dns query", '/q";', "/../x"])
+    def test_bad_doh_endpoint_is_rejected(self, endpoint):
+        with pytest.raises(AnsibleFilterError, match="endpoint"):
+            self.check(doh={"enabled": True, "endpoints": [endpoint]})
+
+    def test_xot_primary_needs_dot(self):
+        with pytest.raises(AnsibleFilterError, match="bind_dot"):
+            self.check(zones=[_xot_zone()], dot={"enabled": False})
+
+    def test_xot_secondary_needs_a_ca(self):
+        with pytest.raises(AnsibleFilterError, match="ca"):
+            self.check(zones=[_xot_zone()], host="ns2", tls={}, dot={"enabled": False})
+
+    def test_xot_secondary_with_ca_passes(self):
+        assert self.check(zones=[_xot_zone()], host="ns2", tls={"ca": "-----BEGIN CERTIFICATE-----"},
+                          dot={"enabled": False})

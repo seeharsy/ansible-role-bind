@@ -1,0 +1,55 @@
+---
+# A throwaway CA and one certificate per server, created on the controller in
+# Molecule's temporary directory. Nothing here is reused outside the test.
+- name: Create the test CA
+  hosts: localhost
+  gather_facts: false
+  vars:
+    test_pki: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/pki"
+  tasks:
+    - name: Create the PKI directory
+      ansible.builtin.file:
+        path: "{{ test_pki }}"
+        state: directory
+        mode: "0700"
+
+    - name: Create the CA
+      ansible.builtin.command:
+        argv: [openssl, req, -x509, -newkey, ec, -pkeyopt, "ec_paramgen_curve:P-256", -nodes,
+               -keyout, ca.key, -out, ca.pem, -days, "2", -subj, "/CN=Molecule test CA",
+               -addext, "basicConstraints=critical,CA:TRUE",
+               -addext, "keyUsage=critical,keyCertSign,cRLSign"]
+        chdir: "{{ test_pki }}"
+        creates: ca.pem
+
+- name: Create server certificates
+  hosts: bind
+  gather_facts: false
+  tasks:
+    - name: Write certificate extensions
+      ansible.builtin.copy:
+        dest: "{{ test_pki }}/{{ test_tls_name }}.ext"
+        content: |
+          subjectAltName=DNS:{{ test_tls_name }},IP:{{ test_ip }}
+          extendedKeyUsage=serverAuth
+          keyUsage=critical,digitalSignature
+        mode: "0600"
+      delegate_to: localhost
+
+    - name: Create a key and signing request
+      ansible.builtin.command:
+        argv: [openssl, req, -newkey, ec, -pkeyopt, "ec_paramgen_curve:P-256", -nodes,
+               -keyout, "{{ test_tls_name }}.key", -out, "{{ test_tls_name }}.csr",
+               -subj, "/CN={{ test_tls_name }}"]
+        chdir: "{{ test_pki }}"
+        creates: "{{ test_tls_name }}.key"
+      delegate_to: localhost
+
+    - name: Sign the server certificate
+      ansible.builtin.command:
+        argv: [openssl, x509, -req, -in, "{{ test_tls_name }}.csr", -CA, ca.pem, -CAkey, ca.key,
+               -CAcreateserial, -days, "2", -extfile, "{{ test_tls_name }}.ext",
+               -out, "{{ test_tls_name }}.pem"]
+        chdir: "{{ test_pki }}"
+        creates: "{{ test_tls_name }}.pem"
+      delegate_to: localhost

@@ -4,6 +4,10 @@ test_net: "172.30.{{ lookup('ansible.builtin.env', 'MOLECULE_NET') | default('53
 test_ns1_ip: "{{ test_net }}.11"
 test_ns2_ip: "{{ test_net }}.12"
 test_primary: "{{ groups['primary'] | first }}"
+test_ip: "{{ test_ns1_ip if inventory_hostname in groups['primary'] else test_ns2_ip }}"
+test_tls_name: "{{ 'ns1' if inventory_hostname in groups['primary'] else 'ns2' }}.example.test"
+# Created by prepare.yml.
+test_pki: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/pki"
 
 # Test fixtures only. These are not real keys.
 test_tsig_secret: dGVzdC1vbmx5LW5vdC1hLXJlYWwta2V5LWRvLW5vdC11c2U=
@@ -12,6 +16,18 @@ test_ddns_secret: dGVzdC1vbmx5LWRkbnMta2V5LW5vdC1mb3ItcmVhbC11c2U=
 bind_listen:
   ipv4: [any]
   ipv6: []
+
+# DoT and DoH on both servers, with certificates from the test CA.
+bind_tls:
+  cert: "{{ lookup('ansible.builtin.file', test_pki ~ '/' ~ test_tls_name ~ '.pem') }}"
+  key: "{{ lookup('ansible.builtin.file', test_pki ~ '/' ~ test_tls_name ~ '.key') }}"
+  ca: "{{ lookup('ansible.builtin.file', test_pki ~ '/ca.pem') }}"
+
+bind_dot:
+  enabled: true
+
+bind_doh:
+  enabled: true
 
 bind_acls:
   - name: secondaries
@@ -52,12 +68,14 @@ bind_statistics:
   enabled: true
 
 test_zones:
-  # Transfers are TSIG-signed.
+  # Transfers are TSIG-signed and only accepted over TLS.
   - name: example.test
     primary: "{{ test_primary }}"
+    xot: true
     primaries:
       - address: "{{ test_ns1_ip }}"
         key: xfer
+        tls_name: ns1.example.test
     name_servers: [ns1, ns2]
     allow_transfer: ["key xfer"]
     statistics: full
@@ -81,9 +99,11 @@ test_zones:
   # Shares 192.0.2.0/24 with example.test, so it must use the same transfer policy.
   - name: second.test
     primary: "{{ test_primary }}"
+    xot: true
     primaries:
       - address: "{{ test_ns1_ip }}"
         key: xfer
+        tls_name: ns1.example.test
     name_servers: [ns1.example.test., ns2.example.test.]
     hostmaster: dns.admin@example.test
     ttl: 60
@@ -93,7 +113,8 @@ test_zones:
     hosts:
       - {name: box, ip: 192.0.2.50}
 
-  # Updated with nsupdate; the role only writes the first version.
+  # Updated with nsupdate; the role only writes the first version. Transfers
+  # stay on plain TCP, signed with TSIG.
   - name: dyn.test
     primary: "{{ test_primary }}"
     primaries:

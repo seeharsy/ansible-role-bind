@@ -91,18 +91,43 @@
       failed_when: "'target.elsewhere.test.' not in acl_xfr.stdout"
 
     - name: Transfer the TSIG zone without the key
-      ansible.builtin.command: dig @{{ test_ns1_ip }} example.test AXFR
+      ansible.builtin.command: dig @{{ test_ns1_ip }} dyn.test AXFR
       register: nokey_xfr
       changed_when: false
       failed_when: "'Transfer failed' not in nokey_xfr.stdout"
 
     - name: Transfer the TSIG zone with the key
       ansible.builtin.command:
-        argv: [dig, "-y", "hmac-sha256:xfer:{{ test_tsig_secret }}", "@{{ test_ns1_ip }}", example.test, AXFR]
+        argv: [dig, "-y", "hmac-sha256:xfer:{{ test_tsig_secret }}", "@{{ test_ns1_ip }}", dyn.test, AXFR]
       register: key_xfr
       changed_when: false
       no_log: true
-      failed_when: "'www.example.test.' not in key_xfr.stdout"
+      failed_when: "'seed.dyn.test.' not in key_xfr.stdout"
+
+    # Ubuntu's AppArmor profile for dig, which also applies inside these
+    # containers on an Ubuntu host, only lets +tls-ca read files under $HOME.
+    - name: Copy the test CA for dig
+      ansible.builtin.copy:
+        src: "{{ test_pki }}/ca.pem"
+        dest: /root/test-ca.pem
+        mode: "0644"
+
+    - name: Transfer the XoT zone over plain TCP with the key
+      ansible.builtin.command:
+        argv: [dig, "-y", "hmac-sha256:xfer:{{ test_tsig_secret }}", "@{{ test_ns1_ip }}", example.test, AXFR]
+      register: plain_xfr
+      changed_when: false
+      no_log: true
+      failed_when: "'Transfer failed' not in plain_xfr.stdout"
+
+    - name: Transfer the XoT zone over TLS with the key
+      ansible.builtin.command:
+        argv: [dig, +tls, +tls-ca=/root/test-ca.pem, +tls-hostname=ns1.example.test,
+               "-y", "hmac-sha256:xfer:{{ test_tsig_secret }}", "@{{ test_ns1_ip }}", example.test, AXFR]
+      register: tls_xfr
+      changed_when: false
+      no_log: true
+      failed_when: "'www.example.test.' not in tls_xfr.stdout"
 
 - name: Verify server-side controls
   hosts: primary
@@ -324,4 +349,71 @@
           - effective.stdout is search('responses-per-second 20;')
           - effective.stdout is search('log-only yes;')
           - effective.stdout is search('zone-statistics terse;')
+        quiet: true
+
+- name: Verify encrypted DNS
+  hosts: secondary
+  gather_facts: false
+  vars:
+    servers:
+      - {ip: "{{ test_ns1_ip }}", name: ns1.example.test}
+      - {ip: "{{ test_ns2_ip }}", name: ns2.example.test}
+  tasks:
+    - name: Query over DoT, checking each server's certificate
+      ansible.builtin.command:
+        argv: [dig, +short, +tls, +tls-ca=/root/test-ca.pem, "+tls-hostname={{ item.name }}",
+               "@{{ item.ip }}", www.example.test, A]
+      loop: "{{ servers }}"
+      register: dot
+      changed_when: false
+      failed_when: dot.stdout != '192.0.2.12'
+
+    - name: Query over DoH, checking each server's certificate
+      ansible.builtin.command:
+        argv: [dig, +short, +https, +tls-ca=/root/test-ca.pem, "+tls-hostname={{ item.name }}",
+               "@{{ item.ip }}", www.example.test, A]
+      loop: "{{ servers }}"
+      register: doh
+      changed_when: false
+      failed_when: doh.stdout != '192.0.2.12'
+
+    - name: Query over DoT expecting a name the certificate does not hold
+      ansible.builtin.command:
+        argv: [dig, +tls, +tls-ca=/root/test-ca.pem, +tls-hostname=wrong.example.test,
+               +tries=1, +timeout=3, "@{{ test_ns1_ip }}", www.example.test, A]
+      register: wrong_name
+      changed_when: false
+      failed_when: >-
+        '192.0.2.12' in wrong_name.stdout
+        or 'verification' not in wrong_name.stdout + wrong_name.stderr
+
+- name: Verify TLS files and settings
+  hosts: bind
+  gather_facts: false
+  tasks:
+    - name: Find the TLS private key
+      ansible.builtin.find:
+        paths: [/etc/named/tls, /etc/bind/tls]
+        patterns: server.key
+      register: tls_key
+
+    - name: Check the private key is not world-readable
+      ansible.builtin.assert:
+        that:
+          - tls_key.files | length == 1
+          - tls_key.files[0].mode == '0640'
+          - tls_key.files[0].pw_name == 'root'
+
+    - name: Dump the effective configuration
+      ansible.builtin.command: named-checkconf -p
+      register: effective
+      changed_when: false
+      no_log: true
+
+    - name: Check TLS hardening
+      ansible.builtin.assert:
+        that:
+          - effective.stdout is search('protocols\s*\{\s*"?TLSv1.2"?;\s*"?TLSv1.3"?;\s*\};')
+          - effective.stdout is search('session-tickets no;')
+          - effective.stdout is search('prefer-server-ciphers yes;')
         quiet: true

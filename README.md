@@ -122,6 +122,9 @@ run with a list of valid keys.
 | `bind_options.rate_limit` | off | Response rate limiting. See [Response rate limiting](#response-rate-limiting). |
 | `bind_options_extra` | `""` | Raw statements appended inside `options { }`. |
 | `bind_tsig_keys` | `[]` | `{name, algorithm, secret}`. Written to a separate `0640 root:named` file, never logged. |
+| `bind_tls` | `{}` | Certificate, key and CA for encrypted DNS. See [Encrypted DNS](#encrypted-dns). |
+| `bind_dot` | disabled | `{enabled, port}` for DNS over TLS (853). |
+| `bind_doh` | disabled | `{enabled, port, endpoints}` for DNS over HTTPS (443, `/dns-query`). |
 | `bind_local_zones` | `[]` | Zones every server answers by itself. See [Local zones](#local-zones). |
 | `bind_statistics` | disabled | `{enabled, host, port, allow}` for the statistics channel. |
 | `bind_extra_include_files` | `[]` | Files included at the end of `named.conf`. |
@@ -147,7 +150,7 @@ it. It accepts a name (`hostmaster` becomes `hostmaster.<zone>.`), an FQDN, or
 | `name` | Zone name. Required. |
 | `primary` | Inventory hostname of the primary. That host is primary; all others are secondaries. |
 | `type` | `primary`, `secondary` or `forward`. Overrides the role worked out from `primary`. |
-| `primaries` | Addresses secondaries transfer from: `"192.0.2.11"` or `{address, key, port}`. Required on secondaries. |
+| `primaries` | Addresses secondaries transfer from: `"192.0.2.11"` or `{address, key, port, tls_name}`. Required on secondaries. |
 | `name_servers` | NS records. Relative names are inside the zone. Required on the primary. |
 | `allow_transfer` | Who may transfer this zone, e.g. `["key xfer"]` or an ACL name. |
 | `also_notify` | Extra NOTIFY targets, as strings or `{address, key, port}`. |
@@ -160,6 +163,7 @@ it. It accepts a name (`hostmaster` becomes `hostmaster.<zone>.`), an FQDN, or
 | `allow_query` | Who may query this zone. Overrides `bind_options.allow_query`. Not for forward zones. |
 | `statistics` | `full`, `terse` or `none` (or `true`/`false`). Not for forward zones. |
 | `update_policy` | Makes the zone dynamic. See [Dynamic zones](#dynamic-zones). |
+| `xot` | `true` accepts transfers over TLS only. See [Zone transfers over TLS](#zone-transfers-over-tls). |
 | `ttl`, `refresh`, `retry`, `expire`, `minimum`, `hostmaster` | Per-zone overrides. |
 
 ### Reverse zones and PTRs
@@ -174,7 +178,7 @@ it. It accepts a name (`hostmaster` becomes `hostmaster.<zone>.`), an FQDN, or
 - Several forward zones may list the same CIDR. The reverse zone is generated
   once, with PTRs for the hosts of every zone. Because one reverse zone has one
   set of access rules, zones that share a CIDR must use the same `primary`,
-  `type`, `primaries`, `allow_transfer` and `allow_query`; otherwise the run
+  `type`, `primaries`, `allow_transfer`, `allow_query` and `xot`; otherwise the run
   stops with an error naming both zones.
 - A reverse zone takes the most detailed `statistics` level of the zones that
   share it.
@@ -304,6 +308,104 @@ bind_zones:
 - Create keys with `tsig-keygen -a hmac-sha256 <name>` and store the secret in
   Ansible Vault.
 
+## Encrypted DNS
+
+BIND serves DNS over TLS (DoT, RFC 7858) and DNS over HTTPS (DoH, RFC 8484)
+next to plain DNS, on the `bind_listen` addresses:
+
+```yaml
+bind_tls:
+  cert: "{{ lookup('file', 'pki/' ~ inventory_hostname ~ '.pem') }}"   # leaf + intermediates
+  key: "{{ vault_bind_tls_key }}"
+  ca: "{{ lookup('file', 'pki/internal-ca.pem') }}"                     # for XoT on secondaries
+
+bind_dot:
+  enabled: true            # port 853
+
+bind_doh:
+  enabled: true            # port 443, path /dns-query
+```
+
+- Give `cert`, `key` and `ca` as PEM content, or `cert_file`, `key_file` and
+  `ca_file` as paths to files already on the server, for example ones another
+  tool renews. Keep the key in Ansible Vault. The role writes content to
+  `<conf dir>/tls/` as `0640 root:named`, and never logs or diffs the key.
+- The certificate needs a `subjectAltName` for every name clients use to reach
+  the server, and an IP entry if clients connect by address.
+- TLS 1.2 and 1.3 only. TLS 1.2 is limited to ECDHE with AES-GCM or
+  ChaCha20, and session tickets are off. Change `bind_tls.protocols` and
+  `bind_tls.ciphers` to tighten this further, for example to TLS 1.3 only.
+- A new certificate takes effect when the role runs again: BIND loads it on
+  reload, without a restart.
+- Encryption does not change who may use the server. `allow_query` and
+  `allow_recursion` apply to DoT and DoH as they do to port 53.
+- The role does not manage the firewall. Open 853/tcp for DoT and 443/tcp for
+  DoH.
+- On EL with SELinux enforcing, 443 is an HTTP port, so the role turns on the
+  `named_tcp_bind_http_port` boolean when DoH is enabled. Port 853 is already
+  a DNS port. Another DoH port must be labelled `http_port_t` or
+  `dns_port_t` first.
+
+### Zone transfers over TLS
+
+With `xot: true`, the primary accepts transfers of that zone only over TLS,
+on its DoT listener, and secondaries check the primary's certificate before
+transferring:
+
+```yaml
+bind_zones:
+  - name: example.internal
+    primary: ns1
+    xot: true
+    allow_transfer: ["key xfer"]
+    primaries:
+      - {address: 192.0.2.11, key: xfer, tls_name: ns1.example.internal}
+```
+
+- The primary needs `bind_dot.enabled`. Each secondary needs `bind_tls.ca` (or
+  `ca_file`), the CA that signed the primary's certificate.
+- `tls_name` must match a name in the primary's certificate. A secondary
+  refuses to transfer from a server that cannot prove it.
+- Keep the TSIG key. TLS hides the zone and proves which server is the
+  primary; the key proves which servers may transfer.
+- NOTIFY stays on plain DNS, signed with the key as before.
+
+### Clients
+
+What each client needs to use DoT or DoH with certificates from an internal
+CA:
+
+| Client | How | Notes |
+|---|---|---|
+| Ubuntu, Debian with systemd-resolved | `DNS=192.0.2.11#ns1.example.internal` and `DNSOverTLS=yes` in `resolved.conf` | The `#name` is checked against the certificate. Add the internal CA to the system store (`update-ca-certificates`). `opportunistic` encrypts without checking and falls back to plain DNS. |
+| Rocky Linux | Install `systemd-resolved` and configure it as above | NetworkManager uses plain DNS by default. Add the CA with `update-ca-trust`. |
+| Proxmox VE | As for Debian, or keep plain DNS on a trusted management network | Proxmox writes `/etc/resolv.conf` itself; check that it points at resolved before relying on it. |
+| macOS, iOS, iPadOS | A configuration profile with a DNS Settings payload (`DNSProtocol` `TLS` or `HTTPS`, `ServerName`, `ServerAddresses` or `ServerURL`) | Install the internal CA in the same profile. On iOS, also turn on full trust for it under Settings > General > About > Certificate Trust Settings. |
+| Android | See below | |
+
+**Android** cannot use an internal CA for Private DNS. In strict mode
+(Settings > Private DNS > hostname), Android's resolver trusts only the
+system CA store, `/system/etc/security/cacerts`, and ignores CAs the user
+installs. A certificate from an internal CA fails, and Android then sends no
+DNS at all. The choices are:
+
+- a certificate from a public CA for a hostname in a public domain you
+  control, which every client then trusts;
+- Automatic mode, where Android tries DoT to the DNS servers it received from
+  DHCP without checking the certificate. This encrypts the traffic but does
+  not prove which server answered;
+- plain DNS on networks you trust.
+
+Ubuntu 26.04 confines `dig` with AppArmor: `+tls-ca` can only read files
+under your home directory or the system certificate directories.
+
+To test from a client:
+
+```sh
+dig +tls +tls-ca=$HOME/internal-ca.pem +tls-hostname=ns1.example.internal @192.0.2.11 example.internal SOA
+dig +https +tls-ca=$HOME/internal-ca.pem +tls-hostname=ns1.example.internal @192.0.2.11 example.internal SOA
+```
+
 ## Security defaults
 
 - Zone transfers are refused unless you allow them (`allow_transfer: [none]`).
@@ -319,6 +421,11 @@ bind_zones:
 - Dynamic updates need a TSIG key and an explicit list of record types; every
   key a zone refers to must exist in `bind_tsig_keys`.
 - Local zones refuse transfers and updates.
+- DoT and DoH are off by default. When on, they allow only TLS 1.2 and 1.3 with
+  forward-secret AEAD ciphers and no session tickets, and the private key is
+  `0640` and never logged.
+- `xot` zones refuse transfers over plain TCP, and secondaries verify the
+  primary's certificate and name.
 - `named.conf` and every zone file are validated before they replace the live
   files.
 
