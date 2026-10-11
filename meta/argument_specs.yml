@@ -188,4 +188,5 @@ argument_specs:
           port: {type: int, description: Default 8053.}
           allow: {type: list, elements: str, description: "Default [127.0.0.1]."}
       bind_extra_include_files: {type: list, elements: str, description: Files included at the end of named.conf.}
+      bind_remove_stale_files: {type: bool, description: Remove zone files and v5 files the role no longer manages. Default true.}
       bind_package_state: {type: str, choices: [present, latest], description: Default present.}

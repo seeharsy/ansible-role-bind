@@ -129,8 +129,9 @@
     - __bind_http_port_bool.stdout is search('--> off')
   notify: Reload BIND
 
+# -Z ends each file name with a NUL byte, so file names cannot forge records.
 - name: Read hashes of existing zone files
-  ansible.builtin.shell: grep -sH '^; Hash:' -- {{ bind_zone_dir | quote }}/* || true
+  ansible.builtin.shell: grep -sHZ '^; Hash:' -- {{ bind_zone_dir | quote }}/* || true
   register: __bind_hash_headers
   changed_when: false
   check_mode: false
@@ -150,7 +151,7 @@
   vars:
     __bind_content: "{{ item | bind_zone_content(__bind_zone_defaults) }}"
     __bind_hash: "{{ __bind_content | bind_content_hash }}"
-    __bind_previous: "{{ (__bind_hash_headers.stdout_lines | bind_parse_hashes)[item.name] | default({}) }}"
+    __bind_previous: "{{ (__bind_hash_headers.stdout_lines | bind_parse_hashes(bind_zone_dir))[item.name] | default({}) }}"
     __bind_serial: >-
       {{ __bind_previous.serial
          if __bind_previous.hash | default('') == __bind_hash
@@ -205,3 +206,37 @@
     setype: named_conf_t
     validate: named-checkconf %s
   notify: Reload BIND
+
+# v5 wrote zones into bind_dir (/var/cache/bind on Debian) and its keys into
+# auth_transfer.conf; zones dropped from the inventory leave files behind too.
+- name: Remove files the role no longer manages
+  when: bind_remove_stale_files
+  block:
+    - name: Find zone files written by this role
+      ansible.builtin.shell: >-
+        grep -sHZ '^; Hash:' --
+        {% for dir in [bind_zone_dir, bind_dir] | unique %}{{ dir | quote }}/* {% endfor %}|| true
+      register: __bind_managed_files
+      changed_when: false
+      check_mode: false
+
+    - name: Remove zone files for zones that are no longer configured
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop: >-
+        {{ __bind_managed_files.stdout_lines
+           | bind_stale_zone_files(__bind_zone_files | map(attribute='name')
+                                   | map('regex_replace', '^', bind_zone_dir ~ '/') | list,
+                                   [bind_zone_dir, bind_dir]) }}
+
+    - name: Remove the v5 TSIG key file
+      ansible.builtin.file:
+        path: "{{ bind_conf_dir }}/auth_transfer.conf"
+        state: absent
+
+    - name: Remove the v5 secondary zone directory
+      ansible.builtin.file:
+        path: "{{ bind_dir }}/secondary"
+        state: absent
+      when: bind_dir ~ '/secondary' != bind_secondary_dir

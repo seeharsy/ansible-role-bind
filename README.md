@@ -129,6 +129,7 @@ run with a list of valid keys.
 | `bind_statistics` | disabled | `{enabled, host, port, allow}` for the statistics channel. |
 | `bind_extra_include_files` | `[]` | Files included at the end of `named.conf`. |
 | `bind_package_state` | `present` | `latest` upgrades BIND on every run. |
+| `bind_remove_stale_files` | `true` | Remove zone files the role wrote for zones that are gone, and v5's leftovers. See [Stale files](#stale-files). |
 
 Paths, package and service names (`bind_packages`, `bind_service`,
 `bind_config`, `bind_conf_dir`, `bind_dir`, `bind_zone_dir`,
@@ -433,6 +434,23 @@ dig +https +tls-ca=$HOME/internal-ca.pem +tls-hostname=ns1.example.internal @192
   primary's certificate and name.
 - `named.conf` and every zone file are validated before they replace the live
   files.
+
+## Stale files
+
+Every zone file the role writes starts with a `; Hash:` line, in v5 and v6
+alike. On each run the role removes:
+
+- files with that header in `bind_zone_dir` and `bind_dir` whose zone is no
+  longer configured, including v5's zone files in `/var/cache/bind` on
+  Debian;
+- v5's key file, `<conf dir>/auth_transfer.conf`;
+- v5's secondary directory, `<bind_dir>/secondary`, where it differs from
+  `bind_secondary_dir` (on EL).
+
+Files without the header, such as the package's `named.ca` or files you
+manage yourself, are never touched, and nothing outside those paths is
+removed. Run with `--check --diff` to see what would go, or set
+`bind_remove_stale_files: false` to keep everything.
 
 ## Serial numbers
 

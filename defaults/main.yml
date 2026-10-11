@@ -88,6 +88,11 @@ bind_statistics: {}
 # Extra files to include at the end of named.conf.
 bind_extra_include_files: []
 
+# Remove files the role no longer manages: zone files it wrote (v5 or v6)
+# for zones that are gone, and v5's key file and secondary directory. Files
+# without the role's "; Hash:" header are never touched.
+bind_remove_stale_files: true
+
 # "present" or "latest". Upgrading BIND on every run is your choice to make.
 bind_package_state: present
 

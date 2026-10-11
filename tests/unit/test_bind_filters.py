@@ -358,20 +358,39 @@ def test_filters_are_registered():
 
 
 # --- hash headers -------------------------------------------------------------
+# Input is `grep -sHZ '^; Hash:'` output: the file name ends in a NUL byte,
+# which no file name can contain, so a crafted name cannot forge a record.
 
 class TestParseHashes:
     def test_parses_grep_output(self):
         lines = [
-            "/var/named/example.test:; Hash: abc123 2026101101",
-            "/var/named/2.0.192.in-addr.arpa:; Hash: def456 1791680000",
+            "/var/named/example.test\0; Hash: abc123 2026101101",
+            "/var/named/2.0.192.in-addr.arpa\0; Hash: def456 1791680000",
         ]
-        assert bind.parse_hashes(lines) == {
+        assert bind.parse_hashes(lines, "/var/named") == {
             "example.test": {"hash": "abc123", "serial": 2026101101},
             "2.0.192.in-addr.arpa": {"hash": "def456", "serial": 1791680000},
         }
 
+    def test_trailing_slash_on_the_directory(self):
+        lines = ["/srv/zones//example.test\0; Hash: abc 5"]
+        assert bind.parse_hashes(lines, "/srv/zones/") == {"example.test": {"hash": "abc", "serial": 5}}
+
     def test_ignores_malformed_lines(self):
-        assert bind.parse_hashes(["/var/named/x:; Hash:", "garbage", ""]) == {}
+        assert bind.parse_hashes(["/var/named/x\0; Hash:", "garbage", ""], "/var/named") == {}
+
+    def test_ignores_colon_separated_output(self):
+        assert bind.parse_hashes(["/var/named/example.test:; Hash: abc 1"], "/var/named") == {}
+
+    def test_ignores_files_outside_the_directory(self):
+        lines = ["/etc/example.test\0; Hash: abc 1", "example.test\0; Hash: abc 1"]
+        assert bind.parse_hashes(lines, "/var/named") == {}
+
+    def test_a_newline_in_a_file_name_cannot_forge_a_record(self):
+        # A file named "x\nexample.test" splits into two lines; the second
+        # looks like a record for example.test but has no directory.
+        lines = ["/var/named/x", "example.test\0; Hash: forged 9999999999"]
+        assert bind.parse_hashes(lines, "/var/named") == {}
 
 
 # --- zones per role -----------------------------------------------------------
@@ -679,3 +698,42 @@ class TestValidateTls:
     def test_xot_secondary_with_ca_passes(self):
         assert self.check(zones=[_xot_zone()], host="ns2", tls={"ca": "-----BEGIN CERTIFICATE-----"},
                           dot={"enabled": False})
+
+
+# --- stale files --------------------------------------------------------------
+
+class TestStaleZoneFiles:
+    dirs = ["/var/named", "/var/cache/bind"]
+    lines = [
+        "/var/named/example.test\0; Hash: 9f2c 2026101101",
+        "/var/named/gone.test\0; Hash: 0a1b2c3d 1791680000",
+        "/var/cache/bind/example.test\0; Hash: 5e6f 1791680000",
+        "garbage",
+    ]
+
+    def test_files_not_kept_are_stale(self):
+        assert bind.stale_zone_files(self.lines, ["/var/named/example.test"], self.dirs) == [
+            "/var/cache/bind/example.test",
+            "/var/named/gone.test",
+        ]
+
+    def test_nothing_is_stale_when_all_are_kept(self):
+        keep = ["/var/named/example.test", "/var/named/gone.test", "/var/cache/bind/example.test"]
+        assert bind.stale_zone_files(self.lines, keep, self.dirs) == []
+
+    def test_lines_without_a_header_are_never_stale(self):
+        assert bind.stale_zone_files(["/var/named/named.ca\0; not a hash"], [], self.dirs) == []
+
+    def test_duplicate_lines_are_reported_once(self):
+        assert bind.stale_zone_files(self.lines[1:2] * 2, [], self.dirs) == ["/var/named/gone.test"]
+
+    @pytest.mark.parametrize("line", [
+        "/etc/shadow\0; Hash: a 1",                    # outside the zone directories
+        ".ssh\0; Hash: a 1",                           # relative, from a newline in a name
+        "/var/named/../../etc/shadow\0; Hash: a 1",    # escapes the directory
+        "/var/named/sub/zone\0; Hash: a 1",            # below the top level
+        "/var/named/bad name\0; Hash: a 1",            # not a zone file name
+        "/var/named/x:; Hash: a 1",                     # colon-separated, not grep -Z
+    ])
+    def test_paths_that_are_not_zone_files_are_never_stale(self, line):
+        assert bind.stale_zone_files([line], [], self.dirs) == []
