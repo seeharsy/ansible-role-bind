@@ -1,0 +1,4 @@
+---
+# BIND 9.20 builds the localhost zones in; Debian 13 ships only the root hints.
+__bind_os_default_includes:
+  - /etc/bind/named.conf.root-hints

@@ -1,86 +1,70 @@
 ---
+# Addresses and port for plain DNS. An empty list disables that family.
+bind_listen: {}
+#  ipv4: [127.0.0.1]
+#  ipv6: ["::1"]
+#  port: 53
 
-# List of zones for which this name server is authoritative
+# Named address match lists. ACLs grant nothing by themselves; use their
+# names in bind_options or in a zone's allow_* settings.
+bind_acls: []
+#  - name: clients
+#    match: [192.0.2.0/24, localhost]
+
+# Server-wide options. Anything you leave out keeps the default shown here.
+bind_options: {}
+#  recursion: false
+#  allow_query: [localhost]
+#  allow_recursion: [localhost, localnets]
+#  allow_transfer: [none]
+#  forwarders: []
+#  forward: first              # or "only"
+#  dnssec_validation: auto     # auto | "yes" (needs your own trust-anchors) | "no"
+#  validate_except: []         # names not to validate, e.g. private namespaces
+#  query_log: false
+
+# Raw named.conf statements appended inside the options block.
+bind_options_extra: ""
+
+# TSIG keys, written to a separate file readable only by root and BIND.
+# Generate a secret with: tsig-keygen -a hmac-sha256 <name>
+bind_tsig_keys: []
+#  - name: xfer
+#    algorithm: hmac-sha256
+#    secret: "{{ vault_bind_xfer_secret }}"
+
+# SOA and TTL defaults. Each zone can override any of these.
+bind_zone_defaults: {}
+#  ttl: 1h
+#  refresh: 1d
+#  retry: 1h
+#  expire: 1w
+#  minimum: 1h
+#  hostmaster: hostmaster
+
+# Zones. See README for every key.
 bind_zones: []
 
-# List of acls.
-bind_acls: []
+# Statistics channel (HTTP/XML/JSON). Off by default.
+bind_statistics: {}
+#  enabled: false
+#  host: 127.0.0.1
+#  port: 8053
+#  allow: [127.0.0.1]
 
-# Key binding for secondary servers
-bind_dns_keys: []
-#  - name: primary_key
-#    algorithm: hmac-sha256
-#    secret: "azertyAZERTY123456"
-
-# List of IPv4 address of the network interface(s) to listen on. Set to "any"
-# to listen on all interfaces
-bind_listen_ipv4:
-  - "127.0.0.1"
-
-# The list of ports to listen on for IPv4 addresses
-bind_listen_ipv4_port:
-  - 53
-
-# List of IPv6 address of the network interface(s) to listen on.
-bind_listen_ipv6:
-  - "::1"
-
-# The list of ports to listen on for IPv6 addresses
-bind_listen_ipv6_port:
-  - 53
-
-# List of hosts that are allowed to query this DNS server.
-bind_allow_query:
-  - "localhost"
-
-# A key-value list mapping server-IPs to TSIG keys for signing requests
-bind_key_mapping: {}
-
-# Determines whether recursion should be allowed. Typically, an authoritative
-# name server should have recursion turned OFF.
-bind_recursion: false
-bind_allow_recursion:
-  - "any"
-
-# Allows BIND to be set up as a caching name server
-bind_forward_only: false
-
-# List of name servers to forward DNS requests to.
-bind_forwarders: []
-
-# DNS round robin order (random or cyclic)
-bind_rrset_order: "random"
-
-# statistics channels configuration
-bind_statistics_channels: false
-bind_statistics_port: 8053
-bind_statistics_host: 127.0.0.1
-bind_statistics_allow:
-  - "127.0.0.1"
-
-# DNSSEC configuration
-bind_dnssec_enable: true
-bind_dnssec_validation: true
-
+# Extra files to include at the end of named.conf.
 bind_extra_include_files: []
 
-# SOA information
-bind_zone_ttl: "1W"
-bind_zone_time_to_refresh: "1D"
-bind_zone_time_to_retry: "1H"
-bind_zone_time_to_expire: "1W"
-bind_zone_minimum_ttl: "1D"
+# "present" or "latest". Upgrading BIND on every run is your choice to make.
+bind_package_state: present
 
-# File mode for primary zone files (needs to be something like 0660 for dynamic updates)
-bind_zone_file_mode: "0640"
-
-# DNS64 support
-bind_dns64: false
-bind_dns64_clients:
-  - "any"
-
-# Set Python version
-bind_python_version: "{{ bind_default_python_version }}"
-
-# Log file
-bind_log: "data/named.run"
+# Paths and names. The defaults come from the platform's vars file.
+bind_packages: "{{ __bind_os_packages }}"
+bind_service: "{{ __bind_os_service }}"
+bind_config: "{{ __bind_os_config }}"
+bind_conf_dir: "{{ __bind_os_conf_dir }}"
+bind_dir: "{{ __bind_os_dir }}"
+bind_zone_dir: "{{ __bind_os_zone_dir }}"
+bind_secondary_dir: "{{ __bind_os_secondary_dir }}"
+bind_user: "{{ __bind_os_user }}"
+bind_group: "{{ __bind_os_group }}"

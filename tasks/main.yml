@@ -1,118 +1,60 @@
 ---
-
-# Initialise distribution-specific variables
-- name: Source specific variables
-  include_vars: "{{ item }}"
-  with_first_found:
-    - "{{ ansible_distribution }}-{{ ansible_distribution_major_version }}.yml"
-    - "{{ ansible_distribution }}.yml"
-    - "{{ ansible_os_family }}-{{ ansible_distribution_major_version }}.yml"
-    - "{{ ansible_os_family }}.yml"
-    - "{{ ansible_distribution_file_variety }}-{{ ansible_distribution_major_version }}.yml"
-    - "{{ ansible_distribution_file_variety }}.yml"
+- name: Check the platform is supported
+  ansible.builtin.assert:
+    that: ansible_facts['os_family'] in ['RedHat', 'Debian']
+    fail_msg: >-
+      This role supports EL 9/10, Debian 12/13 and Ubuntu 24.04, not
+      {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}.
+    quiet: true
   tags: bind
 
-- name: Check `primaries` or `forwarders` was set for each zone
-  assert:
+- name: Load platform variables
+  ansible.builtin.include_vars: "{{ ansible_facts['os_family'] }}.yml"
+  tags: bind
+
+- name: Load version-specific overrides
+  ansible.builtin.include_vars: "{{ item }}"
+  loop: "{{ lookup('ansible.builtin.first_found', __bind_version_vars, errors='ignore', wantlist=True) }}"
+  vars:
+    __bind_version_vars:
+      files:
+        - "{{ ansible_facts['os_family'] }}-{{ ansible_facts['distribution_major_version'] }}.yml"
+      paths: ["{{ role_path }}/vars"]
+  tags: bind
+
+- name: Validate zone definitions
+  ansible.builtin.assert:
+    that: bind_zones | bind_validate_zones(inventory_hostname, __bind_zone_defaults)
+    quiet: true
+  tags: bind
+
+- name: Validate TSIG keys
+  ansible.builtin.assert:
     that:
-      - item.primaries is defined or item.forwarders is defined
-    quiet: yes
-  loop: "{{ bind_zones }}"
+      - item.name is match('^[A-Za-z0-9_.-]+$')
+      - item.algorithm in ['hmac-sha256', 'hmac-sha384', 'hmac-sha512', 'hmac-sha224', 'hmac-sha1', 'hmac-md5']
+      - item.secret is match('^[A-Za-z0-9+/]+={0,2}$')
+    fail_msg: >-
+      TSIG key {{ item.name | default('?') }}: the name may contain only letters, digits,
+      '.', '-' and '_', the algorithm must be an HMAC algorithm, and the secret must be base64.
+    quiet: true
+  loop: "{{ bind_tsig_keys }}"
   loop_control:
-    label: "{{ item.name }}"
+    label: "{{ item.name | default('?') }}"
+  no_log: true
   tags: bind
-
-# Fix molecule and ci failures
-- name: Update package cache for Debian based distros
-  apt:
-    update_cache: yes
-  become: yes
-  changed_when: false
-  when: ansible_os_family == 'Debian'
-  tags: bind
-
-- name: Assert that all XFR keys exist in the key list
-  assert:
-    that: bind_dns_keys | selectattr("name","equalto",bind_key_mapping[item]) | list | count > 0
-  loop: "{{ bind_key_mapping.keys() | list }}"
-  when: bind_key_mapping | list | count > 0
 
 - name: Install BIND
-  package:
-    pkg: "{{ item }}"
-    state: present
-  become: yes
-  with_items:
-    - "{{ bind_packages }}"
+  ansible.builtin.include_tasks: install.yml
   tags: bind
 
-- name: Ensure runtime directories referenced in config exist
-  file:
-    path: "{{ item }}"
-    state: directory
-    owner: "{{ bind_owner }}"
-    group: "{{ bind_group }}"
-    mode: 0770
-  become: yes
-  with_items:
-    - "{{ bind_dir }}/dynamic"
-    - "{{ bind_dir }}/data"
-    - "{{ bind_zone_dir }}"
+- name: Configure BIND
+  ansible.builtin.include_tasks: configure.yml
   tags: bind
 
-- name: Ensure Directory for Cached Secondary Zones exists
-  file:
-    path: "{{ bind_secondary_dir }}"
-    state: directory
-    owner: "{{ bind_owner }}"
-    group: "{{ bind_group }}"
-    mode: 0770
-    setype: named_cache_t
-  become: yes
-  tags: bind
-
-- name: Create serial, based on UTC UNIX time
-  command: date -u +%s
-  register: timestamp
-  changed_when: false
-  run_once: true
-  check_mode: false
-  tags: bind
-
-# file to set keys for XFR authentication
-- name: Create extra config for authenticated XFR request
-  template:
-    src: auth_transfer.j2
-    dest: "{{ bind_conf_dir }}/{{ auth_file }}"
-    mode: 0640
-    owner: root
-    group: "{{ bind_group }}"
-  become: yes
-  when: bind_dns_keys is defined and bind_dns_keys|length > 0
-  notify: reload bind
-  tags: bind
-
-- name: Configure zones
-  include_tasks: zones.yml
-  tags: bind
-
-- name: Main BIND config file
-  template:
-    src: etc_named.conf.j2
-    dest: "{{ bind_config }}"
-    owner: "{{ bind_owner }}"
-    group: "{{ bind_group }}"
-    mode: 0640
-    setype: named_conf_t
-    validate: 'named-checkconf %s'
-  become: yes
-  notify: reload bind
-  tags: bind
-
-- name: Start BIND service
-  service:
+- name: Start and enable BIND
+  ansible.builtin.service:
     name: "{{ bind_service }}"
     state: started
     enabled: true
-  become: yes
   tags: bind

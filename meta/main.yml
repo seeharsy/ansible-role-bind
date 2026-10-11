@@ -1,37 +1,19 @@
 ---
 galaxy_info:
   role_name: bind
-  namespace: bertvv
-  author: Bert Van Vreckem
-  description: >
-    Sets up ISC BIND as an authoritative DNS server for one or more domains
-    (primary and/or secondary).
+  namespace: seeharsy
+  author: seeharsy (originally Bert Van Vreckem)
+  description: >-
+    ISC BIND 9.18+ as an authoritative and/or recursive name server on
+    EL 9/10, Debian 12/13 and Ubuntu 24.04.
   license: BSD
-  min_ansible_version: 2.7
+  min_ansible_version: "2.16"
   platforms:
-    - name: ArchLinux
-      versions:
-        - any
-    - name: Debian
-      versions:
-        - jessie
-        - stretch
-        - buster
-    - name: FreeBSD
-      versions:
-        - 12.1
     - name: EL
-      versions:
-        - 6
-        - 7
-        - 8
+      versions: ["9", "10"]
+    - name: Debian
+      versions: [bookworm, trixie]
     - name: Ubuntu
-      versions:
-        - xenial
-        - bionic
-        - focal
-  galaxy_tags:
-    - dns
-    - networking
-    - system
+      versions: [noble]
+  galaxy_tags: [dns, bind, named, networking, dot, doh]
 dependencies: []

@@ -1,0 +1,3 @@
+---
+# EL9's default "bind" package is 9.16; AppStream ships 9.18 as bind9.18.
+__bind_os_packages: [bind9.18, bind9.18-utils]
