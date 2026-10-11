@@ -53,3 +53,41 @@
         chdir: "{{ test_pki }}"
         creates: "{{ test_tls_name }}.pem"
       delegate_to: localhost
+
+# Files a v5 server would have, so converge shows what the role removes and
+# what it leaves alone.
+- name: Leave v5 files behind
+  hosts: bind
+  gather_facts: true
+  vars:
+    v5_conf_dir: "{{ '/etc/named' if ansible_facts['os_family'] == 'RedHat' else '/etc/bind' }}"
+    v5_dir: "{{ '/var/named' if ansible_facts['os_family'] == 'RedHat' else '/var/cache/bind' }}"
+  tasks:
+    - name: Create the v5 directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ v5_conf_dir }}"
+        - "{{ v5_dir }}"
+        - "{{ v5_dir }}/secondary"
+
+    - name: Write v5 files
+      ansible.builtin.copy:
+        dest: "{{ item.path }}"
+        content: "{{ item.content }}"
+        mode: "0640"
+      loop:
+        - path: "{{ v5_conf_dir }}/auth_transfer.conf"
+          content: "server 192.0.2.1 { keys { old; }; };\n"
+        - path: "{{ v5_dir }}/gone.test"
+          content: "; Hash: 0123456789abcdef0123456789abcdef 1791680000\n; zone removed from the inventory\n"
+        - path: "{{ v5_dir }}/example.test"
+          content: "; Hash: fedcba9876543210fedcba9876543210 1791680000\n; v5 copy\n"
+        - path: "{{ v5_dir }}/secondary/example.test"
+          content: "v5 secondary copy\n"
+        - path: "{{ v5_dir }}/not-ours.zone"
+          content: "; written by something else\n"
+      loop_control:
+        label: "{{ item.path }}"

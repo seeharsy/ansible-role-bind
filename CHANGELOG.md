@@ -4,6 +4,18 @@ This file contains al notable changes to the bind Ansible role.
 
 This file adheres to the guidelines of [http://keepachangelog.com/](http://keepachangelog.com/). Versioning follows [Semantic Versioning](http://semver.org/).  "GH-X" refers to the X'th issue/pull request on the Github project.
 
+## 6.1.0 - 2026-10-11
+
+### Added
+
+- `bind_remove_stale_files` (default `true`): removes zone files the role wrote for zones that are no longer configured, and v5's leftovers (`auth_transfer.conf`, v5 zone files, the EL v5 secondary directory). Only files carrying the role's `; Hash:` header are treated as zone files.
+
+### Fixed
+
+- MIGRATION.md: upgrade the primary before the secondaries, in a separate run, and no longer suggests one play for all servers.
+- README: explains the `unreachable (cached)` state a secondary enters when it is configured before the primary's DoT listener exists.
+- Molecule converges the primary before the secondaries, which removes an intermittent Debian 13 NOTIFY failure, and prints named's logs if that check fails.
+
 ## 6.0.0 - 2026-10-11
 
 A rewrite for BIND 9.18+ and current ansible-core, maintained in this fork.

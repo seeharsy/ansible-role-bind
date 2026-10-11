@@ -508,16 +508,26 @@ def content_hash(data):
     return hashlib.sha256(json.dumps(data, sort_keys=True, default=str).encode()).hexdigest()
 
 
-def parse_hashes(lines):
-    """Parse `grep -H '^; Hash:'` output into {zone file name: {hash, serial}}."""
-    result = {}
+def _hash_headers(lines):
+    """Yield (path, hash, serial) from `grep -H '^; Hash:'` output."""
     for line in _as_list(lines):
         path, sep, header = str(line).partition(":")
         fields = header.split()
         if not sep or len(fields) != 4 or fields[:2] != [";", "Hash:"] or not fields[3].isdigit():
             continue
-        result[os.path.basename(path)] = {"hash": fields[2], "serial": int(fields[3])}
-    return result
+        yield path, fields[2], int(fields[3])
+
+
+def parse_hashes(lines):
+    """Parse `grep -H '^; Hash:'` output into {zone file name: {hash, serial}}."""
+    return {os.path.basename(path): {"hash": h, "serial": serial}
+            for path, h, serial in _hash_headers(lines)}
+
+
+def stale_zone_files(lines, keep):
+    """Zone files written by this role (v5 or v6) that it no longer manages."""
+    keep = set(_as_list(keep))
+    return sorted({path for path, _, _ in _hash_headers(lines) if path not in keep})
 
 
 def zones_with_role(zones, inventory_hostname, role):
@@ -544,6 +554,7 @@ class FilterModule:
             "bind_content_hash": content_hash,
             "bind_addresses": addresses,
             "bind_parse_hashes": parse_hashes,
+            "bind_stale_zone_files": stale_zone_files,
             "bind_zones_with_role": zones_with_role,
             "bind_zone_statistics": zone_statistics,
             "bind_update_policy": update_policy,

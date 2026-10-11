@@ -679,3 +679,33 @@ class TestValidateTls:
     def test_xot_secondary_with_ca_passes(self):
         assert self.check(zones=[_xot_zone()], host="ns2", tls={"ca": "-----BEGIN CERTIFICATE-----"},
                           dot={"enabled": False})
+
+
+# --- stale files --------------------------------------------------------------
+
+class TestStaleZoneFiles:
+    lines = [
+        "/var/named/example.test:; Hash: 9f2c 2026101101",
+        "/var/named/gone.test:; Hash: 0a1b2c3d 1791680000",
+        "/var/cache/bind/example.test:; Hash: 5e6f 1791680000",
+        "/var/named/named.ca:; not a hash line",
+        "garbage",
+    ]
+
+    def test_files_not_kept_are_stale(self):
+        keep = ["/var/named/example.test"]
+        assert bind.stale_zone_files(self.lines, keep) == [
+            "/var/cache/bind/example.test",
+            "/var/named/gone.test",
+        ]
+
+    def test_nothing_is_stale_when_all_are_kept(self):
+        keep = ["/var/named/example.test", "/var/named/gone.test", "/var/cache/bind/example.test"]
+        assert bind.stale_zone_files(self.lines, keep) == []
+
+    def test_files_without_the_header_are_never_stale(self):
+        assert "/var/named/named.ca" not in bind.stale_zone_files(self.lines, [])
+
+    def test_duplicate_lines_are_reported_once(self):
+        lines = self.lines[:2] * 2
+        assert bind.stale_zone_files(lines, []).count("/var/named/gone.test") == 1

@@ -146,11 +146,12 @@ data yourself.
      `/var/named/slaves`, the directory SELinux lets named write to. Each
      zone is transferred in full once.
    - Debian/Ubuntu secondaries keep `/var/cache/bind/secondary`.
-
-   The role does not delete the old files. Remove them once v6 is running.
-3. **The old key file goes.** v5 wrote TSIG keys into
-   `<conf dir>/auth_transfer.conf`. v6 writes `<conf dir>/tsig-keys.conf`
-   (`0640 root:named`). Delete the old file.
+3. **v5's files are removed.** From 6.1.0 the role deletes v5's zone files
+   in their old location, `<conf dir>/auth_transfer.conf` (v5's TSIG keys;
+   v6 uses `tsig-keys.conf`, `0640 root:named`) and, on EL,
+   `/var/named/secondary`. See "Stale files" in the README; set
+   `bind_remove_stale_files: false` to keep them. On 6.0.0, delete them by
+   hand.
 4. **Upgrade the primary first, then the secondaries.**
    1. Run the role with `--check --diff` against everything.
    2. Upgrade the primary. Until they are upgraded, v5 secondaries may fail

@@ -417,3 +417,45 @@
           - effective.stdout is search('session-tickets no;')
           - effective.stdout is search('prefer-server-ciphers yes;')
         quiet: true
+
+- name: Verify v5 leftovers are gone
+  hosts: bind
+  gather_facts: true
+  vars:
+    v5_conf_dir: "{{ '/etc/named' if ansible_facts['os_family'] == 'RedHat' else '/etc/bind' }}"
+    v5_dir: "{{ '/var/named' if ansible_facts['os_family'] == 'RedHat' else '/var/cache/bind' }}"
+    v5_removed:
+      - "{{ v5_conf_dir }}/auth_transfer.conf"
+      - "{{ v5_dir }}/gone.test"
+    # On EL the v5 zone and secondary directories differ from v6's; on
+    # Debian the secondary directory is the same, and v6 zones live elsewhere.
+    v5_removed_el:
+      - /var/named/secondary
+    v5_removed_debian:
+      - /var/cache/bind/example.test
+    v5_kept:
+      - "{{ v5_dir }}/not-ours.zone"
+  tasks:
+    - name: Look for each path
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop: >-
+        {{ v5_removed + v5_kept
+           + (v5_removed_el if ansible_facts['os_family'] == 'RedHat' else v5_removed_debian) }}
+      register: v5_paths
+
+    - name: Check what was removed and what was kept
+      ansible.builtin.assert:
+        that: item.stat.exists == (item.item in v5_kept)
+        fail_msg: "{{ item.item }} {{ 'is missing' if item.item in v5_kept else 'is still there' }}"
+        quiet: true
+      loop: "{{ v5_paths.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Check the primary's current zone file is still there
+      ansible.builtin.stat:
+        path: "{{ '/var/named' if ansible_facts['os_family'] == 'RedHat' else '/var/lib/bind' }}/example.test"
+      register: v5_current
+      failed_when: not v5_current.stat.exists
+      when: inventory_hostname in groups['primary']
