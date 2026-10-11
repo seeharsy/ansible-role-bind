@@ -166,8 +166,10 @@ it. It accepts a name (`hostmaster` becomes `hostmaster.<zone>.`), an FQDN, or
 - IPv6 prefixes on a nibble boundary map to one zone; others are split, so a
   `/38` becomes four `/40` zones.
 - Several forward zones may list the same CIDR. The reverse zone is generated
-  once, with PTRs for the hosts of every zone, and takes its primary and
-  transfer settings from the first zone that lists it.
+  once, with PTRs for the hosts of every zone. Because one reverse zone has one
+  transfer policy, zones that share a CIDR must use the same `primary`,
+  `type`, `primaries` and `allow_transfer`; otherwise the run stops with an
+  error naming both zones.
 - Every address of every host gets a PTR, except wildcard names and hosts with
   `ptr: false`. When several hosts share an address, the first one wins unless
   another sets `ptr: true`.
@@ -216,7 +218,8 @@ export PATH=$PWD/.venv/bin:$PATH ANSIBLE_COLLECTIONS_PATH=$PWD/.ansible/collecti
 
 pytest -q tests/unit                     # filter plugin
 yamllint . && ansible-lint               # lint
-MOLECULE_DISTRO=debian13 MOLECULE_IMAGE=docker.io/library/debian:13 molecule test
+molecule/run-all.sh                      # every platform at once
+molecule/run-all.sh debian13             # or just some
 ```
 
 The Molecule scenario runs a primary and a secondary and checks every record

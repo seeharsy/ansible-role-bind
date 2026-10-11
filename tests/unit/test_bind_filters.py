@@ -197,7 +197,9 @@ class TestReverseZones:
             {
                 "name": "other.test",
                 "primary": "ns1",
+                "primaries": ["198.51.100.1"],
                 "name_servers": ["ns1"],
+                "allow_transfer": ["198.51.100.2"],
                 "reverse_zones": ["192.0.2.0/24"],
                 "hosts": [{"name": "box", "ip": "192.0.2.50"}],
             },
@@ -258,6 +260,24 @@ class TestReverseZones:
         zones[1]["primary"] = "ns9"
         with pytest.raises(AnsibleFilterError, match="2.0.192.in-addr.arpa"):
             bind.reverse_zones(zones)
+
+    def test_shared_cidr_with_different_allow_transfer_is_an_error(self):
+        zones = self.zones()
+        zones[1]["allow_transfer"] = ["key other"]
+        with pytest.raises(AnsibleFilterError, match="allow_transfer"):
+            bind.reverse_zones(zones)
+
+    def test_shared_cidr_with_different_primaries_is_an_error(self):
+        zones = self.zones()
+        zones[1]["primaries"] = [{"address": "198.51.100.1", "key": "other"}]
+        with pytest.raises(AnsibleFilterError, match="primaries"):
+            bind.reverse_zones(zones)
+
+    def test_shared_cidr_with_matching_policy_is_fine(self):
+        zones = self.zones()
+        zones[1]["allow_transfer"] = ["198.51.100.2"]
+        zones[1]["primaries"] = ["198.51.100.1"]
+        assert "2.0.192.in-addr.arpa" in [z["name"] for z in bind.reverse_zones(zones)]
 
     def test_hosts_outside_declared_reverse_zones_are_ignored(self):
         names = [z["name"] for z in bind.reverse_zones(self.zones())]

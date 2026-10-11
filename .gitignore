@@ -27,3 +27,6 @@ docker-tests/
 # Ignore Ansible fact cache and project-local collections
 .cache/
 .ansible/
+
+# Local Molecule logs from molecule/run-all.sh
+.molecule-logs/

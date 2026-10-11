@@ -1,9 +1,9 @@
 ---
 - name: Verify answers from both servers
-  hosts: ns2
+  hosts: secondary
   gather_facts: false
   vars:
-    servers: [172.30.53.11, 172.30.53.12]
+    servers: ["{{ test_ns1_ip }}", "{{ test_ns2_ip }}"]
     checks:
       - {q: www.example.test, t: A, want: [192.0.2.12]}
       - {q: web.example.test, t: CNAME, want: [www.example.test.]}
@@ -81,35 +81,35 @@
       failed_when: fwd.stdout != '192.0.2.77'
 
 - name: Verify transfer controls
-  hosts: ns2
+  hosts: secondary
   gather_facts: false
   tasks:
     - name: Transfer the ACL-protected zone from the secondary's address
-      ansible.builtin.command: dig @172.30.53.11 second.test AXFR
+      ansible.builtin.command: dig @{{ test_ns1_ip }} elsewhere.test AXFR
       register: acl_xfr
       changed_when: false
-      failed_when: "'box.second.test.' not in acl_xfr.stdout"
+      failed_when: "'target.elsewhere.test.' not in acl_xfr.stdout"
 
     - name: Transfer the TSIG zone without the key
-      ansible.builtin.command: dig @172.30.53.11 example.test AXFR
+      ansible.builtin.command: dig @{{ test_ns1_ip }} example.test AXFR
       register: nokey_xfr
       changed_when: false
       failed_when: "'Transfer failed' not in nokey_xfr.stdout"
 
     - name: Transfer the TSIG zone with the key
       ansible.builtin.command:
-        argv: [dig, "-y", "hmac-sha256:xfer:{{ test_tsig_secret }}", "@172.30.53.11", example.test, AXFR]
+        argv: [dig, "-y", "hmac-sha256:xfer:{{ test_tsig_secret }}", "@{{ test_ns1_ip }}", example.test, AXFR]
       register: key_xfr
       changed_when: false
       no_log: true
       failed_when: "'www.example.test.' not in key_xfr.stdout"
 
 - name: Verify server-side controls
-  hosts: ns1
+  hosts: primary
   gather_facts: false
   tasks:
     - name: Transfer the ACL-protected zone from an address outside the ACL
-      ansible.builtin.command: dig @127.0.0.1 second.test AXFR
+      ansible.builtin.command: dig @127.0.0.1 elsewhere.test AXFR
       register: local_xfr
       changed_when: false
       failed_when: "'Transfer failed' not in local_xfr.stdout"
@@ -141,14 +141,14 @@
         quiet: true
 
 - name: Verify the secondary keeps serving without the primary
-  hosts: ns2
+  hosts: secondary
   gather_facts: false
   tasks:
     - name: Stop the primary
       ansible.builtin.service:
         name: named
         state: stopped
-      delegate_to: ns1
+      delegate_to: "{{ test_primary }}"
 
     - name: Query the secondary while the primary is down
       ansible.builtin.command: dig +norec @127.0.0.1 www.example.test A
@@ -164,4 +164,4 @@
       ansible.builtin.service:
         name: named
         state: started
-      delegate_to: ns1
+      delegate_to: "{{ test_primary }}"

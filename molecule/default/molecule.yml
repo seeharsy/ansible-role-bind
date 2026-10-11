@@ -1,22 +1,27 @@
 ---
 # Primary/secondary pair with recursion, several forward domains, shared and
 # expanded reverse zones, TSIG-signed and ACL-based transfers, and a forward
-# zone. Set MOLECULE_IMAGE to the base image (default rockylinux/rockylinux:10)
-# and MOLECULE_DISTRO to a matching short name used for the built image tag.
+# zone.
+#
+# MOLECULE_IMAGE   base image (default docker.io/rockylinux/rockylinux:10)
+# MOLECULE_DISTRO  short name; keys container, network and image names
+# MOLECULE_NET     third octet of the test subnet 172.30.<n>.0/24
+# Unique values for all three let several distros run at the same time; see
+# molecule/run-all.sh.
 driver:
   name: docker
 platforms:
-  - name: ns1
+  - name: ns1-${MOLECULE_DISTRO:-rockylinux10}
     docker_networks:
-      - name: molecule-bind
+      - name: molecule-bind-${MOLECULE_DISTRO:-rockylinux10}
         ipam_config:
-          - subnet: 172.30.53.0/24
+          - subnet: 172.30.${MOLECULE_NET:-53}.0/24
     buildargs:
       BASE_IMAGE: ${MOLECULE_IMAGE:-docker.io/rockylinux/rockylinux:10}
     image: molecule-bind-${MOLECULE_DISTRO:-rockylinux10}
     dockerfile: ../resources/Dockerfile.j2
     pre_build_image: false
-    groups: [bind]
+    groups: [bind, primary]
     command: ""
     privileged: true
     cgroupns_mode: host
@@ -26,15 +31,15 @@ platforms:
       - /run
       - /tmp
     networks:
-      - name: molecule-bind
-        ipv4_address: 172.30.53.11
-  - name: ns2
+      - name: molecule-bind-${MOLECULE_DISTRO:-rockylinux10}
+        ipv4_address: 172.30.${MOLECULE_NET:-53}.11
+  - name: ns2-${MOLECULE_DISTRO:-rockylinux10}
     buildargs:
       BASE_IMAGE: ${MOLECULE_IMAGE:-docker.io/rockylinux/rockylinux:10}
     image: molecule-bind-${MOLECULE_DISTRO:-rockylinux10}
     dockerfile: ../resources/Dockerfile.j2
     pre_build_image: false
-    groups: [bind]
+    groups: [bind, secondary]
     command: ""
     privileged: true
     cgroupns_mode: host
@@ -44,8 +49,8 @@ platforms:
       - /run
       - /tmp
     networks:
-      - name: molecule-bind
-        ipv4_address: 172.30.53.12
+      - name: molecule-bind-${MOLECULE_DISTRO:-rockylinux10}
+        ipv4_address: 172.30.${MOLECULE_NET:-53}.12
 provisioner:
   name: ansible
   config_options:
@@ -56,6 +61,5 @@ provisioner:
   inventory:
     links:
       group_vars: group_vars/
-      host_vars: host_vars/
 verifier:
   name: ansible

@@ -18,6 +18,10 @@ ROLES = ("primary", "secondary", "forward")
 # Zone names become file names, so allow DNS label characters only.
 _SAFE_ZONE_NAME = re.compile(r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*\.?$")
 
+# Forward zones sharing a reverse zone must agree on these, because the
+# reverse zone holds PTRs for all of them under a single policy.
+_SHARED_POLICY = ("primary", "type", "allow_transfer", "primaries")
+
 # Settings a reverse zone takes over from the forward zone that declares it.
 _INHERITED = ("type", "primary", "primaries", "allow_transfer", "also_notify", "notify",
               "ttl", "refresh", "retry", "expire", "minimum")
@@ -194,17 +198,19 @@ def reverse_zones(zones, defaults=None):
                 rname = _zone_name(net)
                 if rname in found:
                     first = found[rname]
-                    for key in ("primary", "type"):
-                        if first["zone"].get(key) != fwd.get(key):
+                    for key in _SHARED_POLICY:
+                        if first["policy"].get(key) != fwd.get(key):
                             raise AnsibleFilterError(
                                 f"reverse zone {rname} is declared by zones {first['source']} and "
-                                f"{fwd['name']} with different '{key}' settings")
+                                f"{fwd['name']} with different '{key}' settings; zones sharing a "
+                                f"reverse zone must use the same {', '.join(_SHARED_POLICY)}")
                     continue
                 rz = {k: fwd[k] for k in _INHERITED if k in fwd}
                 rz["name"] = rname
                 rz["name_servers"] = [_fqdn(n, origin) for n in _as_list(fwd.get("name_servers"))]
                 rz["hostmaster"] = _rname(fwd.get("hostmaster", defaults["hostmaster"]), origin)
-                found[rname] = {"net": net, "zone": rz, "source": fwd["name"]}
+                found[rname] = {"net": net, "zone": rz, "source": fwd["name"],
+                                "policy": {k: fwd.get(k) for k in _SHARED_POLICY}}
 
     candidates = {}  # ip -> list of (explicit, target)
     for fwd in _as_list(zones):
