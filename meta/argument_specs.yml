@@ -1,0 +1,116 @@
+---
+argument_specs:
+  main:
+    short_description: Install and configure ISC BIND 9.18+ as an authoritative and/or recursive server.
+    options:
+      bind_listen:
+        type: dict
+        description: Addresses and port for plain DNS. Missing keys keep their defaults.
+        options:
+          ipv4: {type: list, elements: str, description: "IPv4 addresses or 'any'. Empty disables IPv4. Default [127.0.0.1]."}
+          ipv6: {type: list, elements: str, description: "IPv6 addresses or 'any'. Empty disables IPv6. Default ['::1']."}
+          port: {type: int, description: Default 53.}
+      bind_acls:
+        type: list
+        elements: dict
+        description: Named address match lists, referenced by name elsewhere.
+        options:
+          name: {type: str, required: true, description: ACL name.}
+          match: {type: list, elements: str, required: true, description: Address match list elements.}
+      bind_options:
+        type: dict
+        description: Server-wide options. Missing keys keep their defaults.
+        options:
+          recursion: {type: bool, description: Default false.}
+          allow_query: {type: list, elements: str, description: "Default [localhost]."}
+          allow_recursion: {type: list, elements: str, description: "Default [localhost, localnets]."}
+          allow_transfer: {type: list, elements: str, description: "Default [none]."}
+          forwarders: {type: list, elements: str, description: Global forwarders.}
+          forward: {type: str, choices: [first, only], description: Default first.}
+          dnssec_validation: {type: raw, description: "auto (default), yes or no."}
+          validate_except: {type: list, elements: str, description: Names exempt from DNSSEC validation.}
+          query_log: {type: bool, description: Log queries to data/query.log. Default false.}
+      bind_options_extra:
+        type: str
+        description: Raw statements appended inside the options block.
+      bind_tsig_keys:
+        type: list
+        elements: dict
+        no_log: true
+        description: TSIG keys.
+        options:
+          name: {type: str, required: true, description: Key name.}
+          algorithm: {type: str, required: true, description: "HMAC algorithm, e.g. hmac-sha256."}
+          secret: {type: str, required: true, no_log: true, description: Base64 secret.}
+      bind_zone_defaults:
+        type: dict
+        description: SOA and TTL defaults. Missing keys keep their defaults.
+        options:
+          ttl: {type: raw, description: Default 1h.}
+          refresh: {type: raw, description: Default 1d.}
+          retry: {type: raw, description: Default 1h.}
+          expire: {type: raw, description: Default 1w.}
+          minimum: {type: raw, description: Default 1h.}
+          hostmaster: {type: str, description: "Mailbox for the SOA record; 'hostmaster' (default), a name, or user@domain."}
+      bind_zones:
+        type: list
+        elements: dict
+        description: Zones. Define each zone once for all servers.
+        options:
+          name: {type: str, required: true, description: Zone name.}
+          type: {type: str, choices: [primary, secondary, forward], description: Force this host's role for the zone.}
+          primary: {type: str, description: Inventory hostname of the primary. Other hosts become secondaries.}
+          primaries:
+            type: list
+            elements: raw
+            description: "Addresses secondaries transfer from: strings or {address, key, port}."
+          name_servers: {type: list, elements: str, description: NS records. Relative names are inside the zone.}
+          hostmaster: {type: str, description: Overrides bind_zone_defaults.hostmaster.}
+          ttl: {type: raw, description: Overrides the default TTL.}
+          refresh: {type: raw, description: Overrides the default.}
+          retry: {type: raw, description: Overrides the default.}
+          expire: {type: raw, description: Overrides the default.}
+          minimum: {type: raw, description: Overrides the default.}
+          allow_transfer: {type: list, elements: str, description: Overrides the global allow_transfer for this zone.}
+          also_notify:
+            type: list
+            elements: raw
+            description: "Extra NOTIFY targets: strings or {address, key, port}."
+          notify: {type: raw, description: "yes (default), no or explicit."}
+          reverse_zones: {type: list, elements: str, description: CIDRs to generate reverse zones for.}
+          forwarders:
+            type: list
+            elements: raw
+            description: Forward zone targets.
+          forward: {type: str, choices: [first, only], description: Forward zone mode. Default only.}
+          validate: {type: bool, description: Set false to exempt a forward zone from DNSSEC validation.}
+          hosts:
+            type: list
+            elements: dict
+            description: A/AAAA records with PTRs and CNAME aliases.
+            options:
+              name: {type: str, required: true, description: "Host name, relative to the zone or an FQDN."}
+              ip: {type: raw, description: IPv4 address or list.}
+              ipv6: {type: raw, description: IPv6 address or list.}
+              aliases: {type: list, elements: str, description: CNAMEs pointing at this host.}
+              ptr: {type: bool, description: true makes this host own the PTR; false suppresses it.}
+              ttl: {type: raw, description: TTL for this host's records.}
+          records:
+            type: list
+            elements: dict
+            description: Any other resource records.
+            options:
+              name: {type: str, required: true, description: Owner name; '@' for the zone apex.}
+              type: {type: str, required: true, description: RR type.}
+              value: {type: str, required: true, description: RDATA exactly as it appears in a zone file.}
+              ttl: {type: raw, description: Record TTL.}
+      bind_statistics:
+        type: dict
+        description: Statistics channel. Missing keys keep their defaults.
+        options:
+          enabled: {type: bool, description: Default false.}
+          host: {type: str, description: Default 127.0.0.1.}
+          port: {type: int, description: Default 8053.}
+          allow: {type: list, elements: str, description: "Default [127.0.0.1]."}
+      bind_extra_include_files: {type: list, elements: str, description: Files included at the end of named.conf.}
+      bind_package_state: {type: str, choices: [present, latest], description: Default present.}

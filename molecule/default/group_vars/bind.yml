@@ -1,0 +1,83 @@
+---
+# Test network and roles; see molecule.yml.
+test_net: "172.30.{{ lookup('ansible.builtin.env', 'MOLECULE_NET') | default('53', true) }}"
+test_ns1_ip: "{{ test_net }}.11"
+test_ns2_ip: "{{ test_net }}.12"
+test_primary: "{{ groups['primary'] | first }}"
+
+# Test fixture only. This is not a real key.
+test_tsig_secret: dGVzdC1vbmx5LW5vdC1hLXJlYWwta2V5LWRvLW5vdC11c2U=
+
+bind_listen:
+  ipv4: [any]
+  ipv6: []
+
+bind_acls:
+  - name: secondaries
+    match: ["{{ test_ns2_ip }}"]
+  - name: clients
+    match: ["{{ test_net }}.0/24", localhost]
+
+bind_options:
+  recursion: true
+  allow_query: [clients]
+  allow_recursion: [clients]
+  dnssec_validation: auto
+  query_log: true
+
+bind_tsig_keys:
+  - name: xfer
+    algorithm: hmac-sha256
+    secret: "{{ test_tsig_secret }}"
+
+bind_zone_defaults:
+  ttl: 5m
+  refresh: 2d
+  retry: 2h
+  expire: 2w
+  minimum: 5m
+
+bind_statistics:
+  enabled: true
+
+test_zones:
+  # Transfers are TSIG-signed.
+  - name: example.test
+    primary: "{{ test_primary }}"
+    primaries:
+      - address: "{{ test_ns1_ip }}"
+        key: xfer
+    name_servers: [ns1, ns2]
+    allow_transfer: ["key xfer"]
+    reverse_zones: [192.0.2.0/24, 198.18.0.0/20, "2001:db8::/64"]
+    hosts:
+      - {name: ns1, ip: "{{ test_ns1_ip }}"}
+      - {name: ns2, ip: "{{ test_ns2_ip }}"}
+      - {name: www, ip: 192.0.2.12, aliases: [web]}
+      - {name: gitlab, ip: 192.0.2.28, aliases: [git]}
+      - {name: "*.pages.gitlab", ip: 192.0.2.28}
+      - {name: multi, ip: [192.0.2.30, 192.0.2.31]}
+      - {name: dual, ip: 192.0.2.40, ipv6: "2001:db8::10"}
+      - {name: mail, ip: 192.0.2.25}
+      - {name: big, ip: 198.18.5.9}
+    records:
+      - {name: "@", type: MX, value: "10 mail"}
+      - {name: sub, type: MX, value: "10 mail"}
+      - {name: "@", type: TXT, value: '"v=spf1 -all"'}
+      - {name: _ntp._udp, type: SRV, value: "0 100 123 www"}
+      - {name: _ntp._udp, type: SRV, value: "0 100 123 gitlab"}
+  # Shares 192.0.2.0/24 with example.test, so it must use the same transfer policy.
+  - name: second.test
+    primary: "{{ test_primary }}"
+    primaries:
+      - address: "{{ test_ns1_ip }}"
+        key: xfer
+    name_servers: [ns1.example.test., ns2.example.test.]
+    hostmaster: dns.admin@example.test
+    ttl: 60
+    allow_transfer: ["key xfer"]
+    reverse_zones: [192.0.2.0/24]
+    hosts:
+      - {name: box, ip: 192.0.2.50}
+
+bind_zones: "{{ test_zones }}"

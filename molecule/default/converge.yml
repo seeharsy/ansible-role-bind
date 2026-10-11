@@ -1,8 +1,5 @@
 ---
-# Remark: Common variables are defined in `group_vars/all.yml`
-
 - name: Converge
-  hosts: all
-
+  hosts: bind
   roles:
-    - role: "bertvv.bind"
+    - role: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') | basename }}"

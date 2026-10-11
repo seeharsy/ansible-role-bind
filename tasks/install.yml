@@ -1,0 +1,30 @@
+---
+- name: Install BIND packages (EL)
+  ansible.builtin.dnf:
+    name: "{{ bind_packages }}"
+    state: "{{ bind_package_state }}"
+    # On EL9 this swaps the 9.16 "bind" package for "bind9.18".
+    allowerasing: true
+  when: ansible_facts['os_family'] == 'RedHat'
+
+- name: Install BIND packages (Debian)
+  ansible.builtin.apt:
+    name: "{{ bind_packages }}"
+    state: "{{ bind_package_state }}"
+    update_cache: true
+    cache_valid_time: 3600
+  when: ansible_facts['os_family'] == 'Debian'
+
+- name: Read the installed BIND version
+  ansible.builtin.command: /usr/sbin/named -v
+  register: __bind_version_output
+  changed_when: false
+  check_mode: false
+
+- name: Check the BIND version
+  ansible.builtin.assert:
+    that: __bind_version is version(__bind_min_version, '>=')
+    fail_msg: "BIND {{ __bind_version }} is installed; this role needs {{ __bind_min_version }} or later."
+    quiet: true
+  vars:
+    __bind_version: "{{ __bind_version_output.stdout | regex_search('BIND (\\d+\\.\\d+\\.\\d+)', '\\1') | first }}"

@@ -1,105 +1,167 @@
 ---
-- name: Verify
-  hosts: all
+- name: Verify answers from both servers
+  hosts: secondary
   gather_facts: false
-
+  vars:
+    servers: ["{{ test_ns1_ip }}", "{{ test_ns2_ip }}"]
+    checks:
+      - {q: www.example.test, t: A, want: [192.0.2.12]}
+      - {q: web.example.test, t: CNAME, want: [www.example.test.]}
+      - {q: multi.example.test, t: A, want: [192.0.2.30, 192.0.2.31]}
+      - {q: anything.pages.gitlab.example.test, t: A, want: [192.0.2.28]}
+      - {q: dual.example.test, t: AAAA, want: ["2001:db8::10"]}
+      - {q: example.test, t: MX, want: [10 mail.example.test.]}
+      - {q: sub.example.test, t: MX, want: [10 mail.example.test.]}
+      - {q: example.test, t: TXT, want: ['"v=spf1 -all"']}
+      - {q: _ntp._udp.example.test, t: SRV, want: [0 100 123 gitlab.example.test., 0 100 123 www.example.test.]}
+      - {q: box.second.test, t: A, want: [192.0.2.50]}
+      - {x: 192.0.2.28, t: PTR, want: [gitlab.example.test.]}
+      - {x: 192.0.2.31, t: PTR, want: [multi.example.test.]}
+      - {x: 192.0.2.50, t: PTR, want: [box.second.test.]}
+      - {x: 198.18.5.9, t: PTR, want: [big.example.test.]}
+      - {x: "2001:db8::10", t: PTR, want: [dual.example.test.]}
+    authoritative_zones:
+      - example.test
+      - second.test
+      - 2.0.192.in-addr.arpa
+      - 0.18.198.in-addr.arpa
+      - 5.18.198.in-addr.arpa
+      - 15.18.198.in-addr.arpa
+      - 0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa
   tasks:
+    - name: Query each record on each server
+      ansible.builtin.command:
+        argv: "{{ ['dig', '+short', '+norec', '@' + item.0]
+                  + (['-x', item.1.x] if item.1.x is defined else [item.1.q, item.1.t]) }}"
+      loop: "{{ servers | product(checks) | list }}"
+      loop_control:
+        label: "{{ item.0 }} {{ item.1.x | default(item.1.q) }} {{ item.1.t }}"
+      register: answers
+      changed_when: false
 
-    # Only collect network facts to reduce setup time
-    - name: Gathering Facts
-      setup:
-        gather_subset:
-          - 'network'
+    - name: Check each answer
+      ansible.builtin.assert:
+        that: (item.stdout_lines | sort) == (item.item.1.want | map('string') | sort)
+        fail_msg: >-
+          {{ item.item.0 }} answered {{ item.stdout_lines }} for
+          {{ item.item.1.x | default(item.item.1.q) }} {{ item.item.1.t }};
+          expected {{ item.item.1.want }}
+        quiet: true
+      loop: "{{ answers.results }}"
+      loop_control:
+        label: "{{ item.item.0 }} {{ item.item.1.x | default(item.item.1.q) }}"
 
-    - name: Set local_dns variable for dig
-      set_fact:
-        local_dns: "{{ '@' + ansible_default_ipv4.address }}"
+    - name: Read SOA records with flags
+      ansible.builtin.command:
+        argv: [dig, +norec, +noall, +comments, +answer, "@{{ item.0 }}", "{{ item.1 }}", SOA]
+      loop: "{{ servers | product(authoritative_zones) | list }}"
+      register: soa
+      changed_when: false
 
-    - name: IPv4 Forward lookups
-      assert:
+    - name: Check both servers answer authoritatively with the same serial
+      ansible.builtin.assert:
         that:
-          - lookup('dig', 'ns1.acme-inc.com', local_dns )    == '10.11.0.1'
-          - lookup('dig', 'ns2.acme-inc.com', local_dns)     == '10.11.0.2'
-          - lookup('dig', 'srv001.acme-inc.com', local_dns)  == '10.11.1.1'
-          - lookup('dig', 'srv002.acme-inc.com', local_dns)  == '10.11.1.2'
-          - lookup('dig', 'mail001.acme-inc.com', local_dns) == '10.11.2.1'
-          - lookup('dig', 'mail002.acme-inc.com', local_dns) == '10.11.2.2'
-          - lookup('dig', 'mail003.acme-inc.com', local_dns) == '10.11.2.3'
-          - lookup('dig', 'srv010.acme-inc.com', local_dns)  == '10.11.0.10'
-          - lookup('dig', 'srv011.acme-inc.com', local_dns)  == '10.11.0.11'
-          - lookup('dig', 'srv012.acme-inc.com', local_dns)  == '10.11.0.12'
-          - lookup('dig', 'srv001.example.com', local_dns)   == '192.0.2.1'
-          - lookup('dig', 'srv002.example.com', local_dns)   == '192.0.2.2'
-          - lookup('dig', 'mail001.example.com', local_dns)  == '192.0.2.10'
+          - item | map(attribute='stdout') | select('search', 'flags:[a-z ]* aa[ ;]') | list | length == 2
+          - serials | unique | length == 1
+          - serials[0] | int > 0
+        fail_msg: "{{ item | map(attribute='stdout') | list }}"
+        quiet: true
+      vars:
+        serials: >-
+          {{ item | map(attribute='stdout') | map('regex_search', 'SOA\s+\S+\s+\S+\s+(\d+)', '\1')
+             | map('first') | list }}
+      loop: "{{ soa.results | groupby('item.1') | map('last') | list }}"
+      loop_control:
+        label: "{{ item[0].item.1 }}"
 
-    - name: IPv4 Reverse lookups
-      assert:
-        that:
-          - lookup('dig', '10.11.0.1/PTR', local_dns)  == 'ns1.acme-inc.com.'
-          - lookup('dig', '10.11.0.2/PTR', local_dns)  == 'ns2.acme-inc.com.'
-          - lookup('dig', '10.11.1.1/PTR', local_dns)  == 'srv001.acme-inc.com.'
-          - lookup('dig', '10.11.1.2/PTR', local_dns)  == 'srv002.acme-inc.com.'
-          - lookup('dig', '10.11.2.1/PTR', local_dns)  == 'mail001.acme-inc.com.'
-          - lookup('dig', '10.11.2.2/PTR', local_dns)  == 'mail002.acme-inc.com.'
-          - lookup('dig', '10.11.2.3/PTR', local_dns)  == 'mail003.acme-inc.com.'
-          - lookup('dig', '10.11.0.10/PTR', local_dns) == 'srv010.acme-inc.com.'
-          - lookup('dig', '10.11.0.11/PTR', local_dns) == 'srv011.acme-inc.com.'
-          - lookup('dig', '10.11.0.12/PTR', local_dns) == 'srv012.acme-inc.com.'
-          - lookup('dig', '192.0.2.1/PTR', local_dns)  == 'srv001.example.com.'
-          - lookup('dig', '192.0.2.2/PTR', local_dns)  == 'srv002.example.com.'
-          - lookup('dig', '192.0.2.10/PTR', local_dns) == 'mail001.example.com.'
+    - name: Resolve through the forward zone on ns2
+      ansible.builtin.command: dig +short @127.0.0.1 target.elsewhere.test A
+      register: fwd
+      changed_when: false
+      failed_when: fwd.stdout != '192.0.2.77'
 
-    - name: IPv4 Alias lookups
-      assert:
-        that:
-          - lookup('dig', 'www.acme-inc.com', local_dns)      == '10.11.1.1'
-          - lookup('dig', 'mysql.acme-inc.com', local_dns)    == '10.11.1.2'
-          - lookup('dig', 'smtp.acme-inc.com', local_dns)     == '10.11.2.1'
-          - lookup('dig', 'mail-in.acme-inc.com', local_dns)  == '10.11.2.1'
-          - lookup('dig', 'imap.acme-inc.com', local_dns)     == '10.11.2.3'
-          - lookup('dig', 'mail-out.acme-inc.com', local_dns) == '10.11.2.3'
-          - lookup('dig', 'www.example.com', local_dns)       == '192.0.2.1'
+- name: Verify transfer controls
+  hosts: secondary
+  gather_facts: false
+  tasks:
+    - name: Transfer the ACL-protected zone from the secondary's address
+      ansible.builtin.command: dig @{{ test_ns1_ip }} elsewhere.test AXFR
+      register: acl_xfr
+      changed_when: false
+      failed_when: "'target.elsewhere.test.' not in acl_xfr.stdout"
 
-    - name: IPv6 Forward lookups
-      assert:
-        that:
-          - lookup('dig', 'srv001.acme-inc.com/AAAA', local_dns)  == '2001:db8::1'
-          - lookup('dig', 'srv002.acme-inc.com/AAAA', local_dns)  == '2001:db8::2'
-          - lookup('dig', 'mail001.acme-inc.com/AAAA', local_dns) == '2001:db8::d:1'
-          - lookup('dig', 'mail002.acme-inc.com/AAAA', local_dns) == '2001:db8::d:2'
-          - lookup('dig', 'mail003.acme-inc.com/AAAA', local_dns) == '2001:db8::d:3'
-          - lookup('dig', 'srv001.example.com/AAAA', local_dns)   == '2001:db9::1'
+    - name: Transfer the TSIG zone without the key
+      ansible.builtin.command: dig @{{ test_ns1_ip }} example.test AXFR
+      register: nokey_xfr
+      changed_when: false
+      failed_when: "'Transfer failed' not in nokey_xfr.stdout"
 
-    - name: IPv6 Reverse lookups
-      assert:
-        that:
-          - lookup('dig', '2001:db8::1/PTR', local_dns)   == 'srv001.acme-inc.com.'
-          - lookup('dig', '2001:db8::2/PTR', local_dns)   == 'srv002.acme-inc.com.'
-          - lookup('dig', '2001:db8::d:1/PTR', local_dns) == 'mail001.acme-inc.com.'
-          - lookup('dig', '2001:db8::d:2/PTR', local_dns) == 'mail002.acme-inc.com.'
-          - lookup('dig', '2001:db8::d:3/PTR', local_dns) == 'mail003.acme-inc.com.'
-          - lookup('dig', '2001:db8::d:3/PTR', local_dns) == 'mail003.acme-inc.com.'
-          - lookup('dig', '2001:db9::1/PTR', local_dns)   == 'srv001.example.com.'
+    - name: Transfer the TSIG zone with the key
+      ansible.builtin.command:
+        argv: [dig, "-y", "hmac-sha256:xfer:{{ test_tsig_secret }}", "@{{ test_ns1_ip }}", example.test, AXFR]
+      register: key_xfr
+      changed_when: false
+      no_log: true
+      failed_when: "'www.example.test.' not in key_xfr.stdout"
 
-    - name: NS records lookup
-      assert:
-        that:
-          - lookup('dig', 'acme-inc.com/NS', local_dns).split(',') | sort | join(',') == 'ns1.acme-inc.com.,ns2.acme-inc.com.'
-          - lookup('dig', 'example.com/NS', local_dns).split(',')  | sort | join(',') == 'ns1.acme-inc.com.,ns2.acme-inc.com.'
+- name: Verify server-side controls
+  hosts: primary
+  gather_facts: false
+  tasks:
+    - name: Transfer the ACL-protected zone from an address outside the ACL
+      ansible.builtin.command: dig @127.0.0.1 elsewhere.test AXFR
+      register: local_xfr
+      changed_when: false
+      failed_when: "'Transfer failed' not in local_xfr.stdout"
 
-    - name: MX records lookup
-      assert:
-        that:
-          - lookup('dig', 'acme-inc.com/MX', local_dns).split(',') | sort | join(',') == '10 mail001.acme-inc.com.,20 mail002.acme-inc.com.'
-          - lookup('dig', 'example.com/MX', local_dns).split(',')  | sort | join(',') == '10 mail001.example.com.'
+    - name: Find the TSIG key file
+      ansible.builtin.find:
+        paths: [/etc/named, /etc/bind]
+        patterns: tsig-keys.conf
+      register: keyfile
 
-    - name: Service records lookup
-      assert:
+    - name: Check the key file is not world-readable
+      ansible.builtin.assert:
         that:
-          - lookup('dig', '_ldap._tcp.acme-inc.com/SRV', local_dns) == '0 100 88 srv010.acme-inc.com.'
+          - keyfile.files | length == 1
+          - keyfile.files[0].mode == '0640'
+          - keyfile.files[0].pw_name == 'root'
 
-    - name: TXT records lookup
-      assert:
+    - name: Dump the effective configuration
+      ansible.builtin.command: named-checkconf -p
+      register: effective
+      changed_when: false
+      no_log: true
+
+    - name: Check global defaults are closed
+      ansible.builtin.assert:
         that:
-          - lookup('dig', '_kerberos.acme-inc.com/TXT', local_dns) == 'KERBEROS.ACME-INC.COM'
-          - lookup('dig', 'acme-inc.com/TXT', local_dns).split(',') | sort | join(',') == 'more text,some text'
+          - effective.stdout is search('allow-transfer\s*\{\s*"?none"?;\s*\};')
+          - effective.stdout is search('dnssec-validation auto;')
+        quiet: true
+
+- name: Verify the secondary keeps serving without the primary
+  hosts: secondary
+  gather_facts: false
+  tasks:
+    - name: Stop the primary
+      ansible.builtin.service:
+        name: named
+        state: stopped
+      delegate_to: "{{ test_primary }}"
+
+    - name: Query the secondary while the primary is down
+      ansible.builtin.command: dig +norec @127.0.0.1 www.example.test A
+      register: failover
+      changed_when: false
+      failed_when: >-
+        'status: NOERROR' not in failover.stdout
+        or failover.stdout is not search('flags:[a-z ]* aa[ ;]')
+        or '192.0.2.12' not in failover.stdout
+
+  post_tasks:
+    - name: Start the primary again
+      ansible.builtin.service:
+        name: named
+        state: started
+      delegate_to: "{{ test_primary }}"

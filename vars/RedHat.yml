@@ -1,35 +1,15 @@
-# Distro specific variables for RedHat
 ---
-bind_default_python_version: "{{ ( ansible_distribution_major_version == '8' ) | ternary( '3', '2' ) }}"
-bind_packages:
-  - "{{ ( bind_python_version == '3' ) | ternary( 'python3-netaddr', 'python-netaddr' ) }}"
-  - "{{ ( bind_python_version == '3' ) | ternary( 'python3-dns', 'python-dns' ) }}"
-  - bind
-  - bind-utils
-
-bind_service: named
-
-# Main config file
-bind_config: /etc/named.conf
-
-# Zone files included in the installation
-bind_default_zone_files:
-  - /etc/named.root.key
+__bind_os_packages: [bind, bind-utils]
+__bind_os_service: named
+__bind_os_config: /etc/named.conf
+__bind_os_conf_dir: /etc/named
+__bind_os_dir: /var/named
+__bind_os_zone_dir: /var/named
+# /var/named/slaves is labelled named_cache_t, so named may write there under SELinux.
+__bind_os_secondary_dir: /var/named/slaves
+__bind_os_managed_keys_dir: /var/named/dynamic
+__bind_os_user: named
+__bind_os_group: named
+__bind_os_root_hints: named.ca
+__bind_os_default_includes:
   - /etc/named.rfc1912.zones
-
-# Directory with run-time stuff
-bind_dir: /var/named
-bind_conf_dir: "/etc/named"
-auth_file: "auth_transfer.conf"
-bind_auth_file: "{{ bind_conf_dir }}/{{ auth_file }}"
-
-bind_owner: root
-bind_group: named
-
-bind_bindkeys_file: "/etc/named.iscdlv.key"
-bind_pid_file: "/run/named/named.pid"
-bind_session_keyfile: "/run/named/session.key"
-
-# Custom location for zone files
-bind_zone_dir: "{{ bind_dir }}"
-bind_secondary_dir: "{{ bind_dir }}/secondary"

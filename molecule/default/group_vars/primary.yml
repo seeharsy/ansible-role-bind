@@ -1,0 +1,12 @@
+---
+# The primary is authoritative for elsewhere.test, with ACL-based transfers;
+# the secondary reaches it through a forward zone.
+bind_zones: "{{ test_zones + [elsewhere_zone] }}"
+
+elsewhere_zone:
+  name: elsewhere.test
+  type: primary
+  name_servers: [ns1.example.test.]
+  allow_transfer: [secondaries]
+  hosts:
+    - {name: target, ip: 192.0.2.77}

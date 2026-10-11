@@ -4,6 +4,48 @@ This file contains al notable changes to the bind Ansible role.
 
 This file adheres to the guidelines of [http://keepachangelog.com/](http://keepachangelog.com/). Versioning follows [Semantic Versioning](http://semver.org/).  "GH-X" refers to the X'th issue/pull request on the Github project.
 
+## 6.0.0 - unreleased
+
+A rewrite for BIND 9.18+ and current ansible-core. **Breaking:** variable
+names and structure changed; see the README until the migration guide lands.
+
+### Added
+
+- Zones are defined once; `primary: <inventory hostname>` decides each host's role.
+- Generic `records` list for any record type, including MX on subdomains (GH-187).
+- Several IPs per host, each with a PTR (GH-209, credit: mikelsid).
+- Reverse zones shared by several forward zones (GH-171, credit: roumano).
+- Non-octet IPv4 and non-nibble IPv6 prefixes split into valid reverse zones (GH-190, credit: imp1sh).
+- Per-zone TTL and SOA overrides (GH-181, credit: roumano).
+- Per-primary TSIG keys for signed transfers and NOTIFY (GH-170, GH-193, credit: rowanthorpe, roumano).
+- `bind_package_state` (GH-219, credit: jof).
+- `validate: false` on forward zones and `bind_options.validate_except`.
+- Input validation through `meta/argument_specs.yml`.
+- Unit tests for the filter plugin and a Molecule primary/secondary scenario for EL 9/10, Debian 12/13 and Ubuntu 24.04.
+
+### Changed
+
+- Minimum BIND version is 9.18; EL9 installs `bind9.18`.
+- Facts are read through `ansible_facts` (GH-234, credit: brlin-tw).
+- Address handling uses Python's `ipaddress`; `netaddr` and the `ipaddr` filter are no longer needed (GH-200, GH-225).
+- `dnssec_validation` defaults to `auto` (GH-233); `dnssec-enable` and `bindkeys-file` are gone (GH-192, GH-229, GH-230).
+- Serials only change when content changes, on every host (GH-162, GH-183, credit: oisteink, patrickstump).
+- Directories are overridable defaults (GH-162).
+- EL secondaries store zones in `/var/named/slaves`, which SELinux lets named write.
+
+### Security
+
+- `allow-transfer` defaults to `none`; ACLs no longer grant transfers (GH-165, GH-189, credit: sangdrax8, jesusmc).
+- `allow_recursion` defaults to `localhost; localnets` instead of `any`.
+- TSIG secrets moved to a `0640` file and are never logged or diffed.
+- The `server` clause listing every key against the host's own address is gone.
+- Zone names are validated before being used as file names.
+
+### Removed
+
+- Zone type auto-detection by IP address, `create_reverse_zones`, `networks`, `ipv6_networks`, `mail_servers`, `services`, `text`, `caa`, `naptr`, `delegate`, `bind_python_version`.
+- Arch Linux, FreeBSD, CentOS 7/8, Debian 8-11 and Ubuntu before 24.04.
+
 ## 5.1.0 - 2020-09-17
 
 This release is long overdue. Apologies to all of you who have been waiting for this!

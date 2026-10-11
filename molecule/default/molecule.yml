@@ -1,93 +1,65 @@
 ---
-dependency:
-  name: galaxy
-
+# Primary/secondary pair with recursion, several forward domains, shared and
+# expanded reverse zones, TSIG-signed and ACL-based transfers, and a forward
+# zone.
+#
+# MOLECULE_IMAGE   base image (default docker.io/rockylinux/rockylinux:10)
+# MOLECULE_DISTRO  short name; keys container, network and image names
+# MOLECULE_NET     third octet of the test subnet 172.30.<n>.0/24
+# Unique values for all three let several distros run at the same time; see
+# molecule/run-all.sh.
 driver:
-  # Specifies the driver that should be used. Podman should also work
   name: docker
-
-# Linting with yamllint and ansible-lint
-lint: |
-  set -e
-  yamllint .
-  ansible-lint -x 106 .
-
 platforms:
-  # Set name and hostname
-  - name: ns1
-    hostname: ns1
-    # Specify which image should be used. Geerlingguys images are Ansible
-    # compatible and have Systemd installed
+  - name: ns1-${MOLECULE_DISTRO:-rockylinux10}
     docker_networks:
-      - name: bind
+      - name: molecule-bind-${MOLECULE_DISTRO:-rockylinux10}
         ipam_config:
-          - subnet: "10.11.0.0/16"
-            gateway: "10.11.0.254"
-    networks:
-      - name: bind
-        ipv4_address: "10.11.0.1"
-    image: "geerlingguy/docker-${MOLECULE_DISTRO:-centos8}-ansible:latest"
-    # Command to execute when the container starts
-    command: ${MOLECULE_DOCKER_COMMAND:-""}
-    # Volumes to mount within the container. Important to enable systemd
+          - subnet: 172.30.${MOLECULE_NET:-53}.0/24
+    buildargs:
+      BASE_IMAGE: ${MOLECULE_IMAGE:-docker.io/rockylinux/rockylinux:10}
+    image: molecule-bind-${MOLECULE_DISTRO:-rockylinux10}
+    dockerfile: ../resources/Dockerfile.j2
+    pre_build_image: false
+    groups: [bind, primary]
+    command: ""
+    privileged: true
+    cgroupns_mode: host
     volumes:
       - /sys/fs/cgroup:/sys/fs/cgroup:rw
-      - ${PWD}:/etc/ansible/roles/bertvv.bind:ro
-      - ${PWD}/library:/root/.ansible/plugins/modules:ro
-    # Give extended privileges to the container. Necessary for Systemd to
-    # operate within the container. DO NOT use extended privileges in a
-    # production environment!
-    privileged: true
-    pre_build_image: true
-    # Allocate pseudo-TTY
-    tty: true
-    environment:
-      container: docker
-
-  - name: ns2
-    hostname: ns2
+    tmpfs:
+      - /run
+      - /tmp
     networks:
-      - name: bind
-        ipv4_address: "10.11.0.2"
-    image: "geerlingguy/docker-${MOLECULE_DISTRO:-centos8}-ansible:latest"
-    command: ${MOLECULE_DOCKER_COMMAND:-""}
+      - name: molecule-bind-${MOLECULE_DISTRO:-rockylinux10}
+        ipv4_address: 172.30.${MOLECULE_NET:-53}.11
+  - name: ns2-${MOLECULE_DISTRO:-rockylinux10}
+    buildargs:
+      BASE_IMAGE: ${MOLECULE_IMAGE:-docker.io/rockylinux/rockylinux:10}
+    image: molecule-bind-${MOLECULE_DISTRO:-rockylinux10}
+    dockerfile: ../resources/Dockerfile.j2
+    pre_build_image: false
+    groups: [bind, secondary]
+    command: ""
+    privileged: true
+    cgroupns_mode: host
     volumes:
       - /sys/fs/cgroup:/sys/fs/cgroup:rw
-      - ${PWD}:/etc/ansible/roles/bertvv.bind:ro
-      - ${PWD}/library:/root/.ansible/plugins/modules:ro
-    privileged: true
-    pre_build_image: true
-    tty: true
-    environment:
-      container: docker
-
-  - name: ns3
-    hostname: ns3
+    tmpfs:
+      - /run
+      - /tmp
     networks:
-      - name: bind
-        ipv4_address: "10.11.0.3"
-    image: "geerlingguy/docker-${MOLECULE_DISTRO:-centos8}-ansible:latest"
-    command: ${MOLECULE_DOCKER_COMMAND:-""}
-    volumes:
-      - /sys/fs/cgroup:/sys/fs/cgroup:rw
-      - ${PWD}:/etc/ansible/roles/bertvv.bind:ro
-      - ${PWD}/library:/root/.ansible/plugins/modules:ro
-    privileged: true
-    pre_build_image: true
-    tty: true
-    environment:
-      container: docker
-
-
+      - name: molecule-bind-${MOLECULE_DISTRO:-rockylinux10}
+        ipv4_address: 172.30.${MOLECULE_NET:-53}.12
 provisioner:
   name: ansible
   config_options:
     defaults:
-      interpreter_python: auto_legacy_silent
-      callback_whitelist: profile_tasks
-    ssh_connection:
-      pipelining: true
-
-# Runs the verify.yml playbook
+      interpreter_python: auto_silent
+      roles_path: ${MOLECULE_PROJECT_DIRECTORY}/..
+      callback_result_format: yaml
+  inventory:
+    links:
+      group_vars: group_vars/
 verifier:
   name: ansible

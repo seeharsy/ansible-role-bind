@@ -12,9 +12,11 @@
 # Python artefacts
 .ropeproject
 *.pyc
+__pycache__/
+.pytest_cache/
+.venv/
 
-# Ignore test directory
-tests/
+# Ignore legacy test directories
 vagrant-tests/
 docker-tests/
 
@@ -22,5 +24,9 @@ docker-tests/
 /.idea
 /.vscode
 
-# Ignore Ansible fact cache
+# Ignore Ansible fact cache and project-local collections
 .cache/
+.ansible/
+
+# Local Molecule logs from molecule/run-all.sh
+.molecule-logs/

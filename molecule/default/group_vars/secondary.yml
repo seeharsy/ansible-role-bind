@@ -1,0 +1,9 @@
+---
+bind_zones: "{{ test_zones + [forward_zone] }}"
+
+forward_zone:
+  name: elsewhere.test
+  type: forward
+  forwarders: ["{{ test_ns1_ip }}"]
+  # .test is not delegated in the signed root, so validation must skip it.
+  validate: false

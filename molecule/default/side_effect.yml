@@ -1,0 +1,23 @@
+---
+# Change a zone on the primary only and check that NOTIFY brings the new
+# serial and record to the secondary without waiting for a refresh.
+- name: Add a record on the primary
+  hosts: primary
+  vars:
+    bind_zones: >-
+      {{ [test_zones[0] | combine({'hosts': test_zones[0].hosts + [{'name': 'added', 'ip': '192.0.2.99'}]})]
+         + test_zones[1:] + [elsewhere_zone] }}
+  roles:
+    - role: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') | basename }}"
+
+- name: Check the secondary received the change
+  hosts: secondary
+  gather_facts: false
+  tasks:
+    - name: Wait for the new record on the secondary
+      ansible.builtin.command: dig +short +norec @127.0.0.1 added.example.test A
+      register: added
+      changed_when: false
+      until: added.stdout == '192.0.2.99'
+      retries: 15
+      delay: 2

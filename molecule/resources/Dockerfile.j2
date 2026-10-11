@@ -1,0 +1,13 @@
+# Systemd-capable test image built from a distribution's official image.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+ENV DEBIAN_FRONTEND=noninteractive
+RUN if command -v dnf >/dev/null; then \
+      dnf -y install python3 systemd sudo iproute procps-ng && dnf clean all; \
+    else \
+      apt-get update \
+      && apt-get -y install --no-install-recommends python3 systemd systemd-sysv sudo iproute2 procps \
+      && rm -rf /var/lib/apt/lists/*; \
+    fi
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]

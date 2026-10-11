@@ -1,0 +1,86 @@
+---
+- name: Work out this host's zones
+  ansible.builtin.set_fact:
+    __bind_primary_zones: "{{ bind_zones | bind_zones_with_role(inventory_hostname, 'primary') }}"
+    __bind_secondary_zones: "{{ bind_zones | bind_zones_with_role(inventory_hostname, 'secondary') }}"
+    __bind_forward_zones: "{{ bind_zones | bind_zones_with_role(inventory_hostname, 'forward') }}"
+    __bind_server_keys: "{{ bind_zones | bind_server_keys(inventory_hostname) }}"
+
+- name: Create the primary zone directory
+  ansible.builtin.file:
+    path: "{{ bind_zone_dir }}"
+    state: directory
+    mode: "0750"
+    owner: root
+    group: "{{ bind_group }}"
+  when: bind_zone_dir != __bind_os_zone_dir
+
+- name: Create directories BIND writes to
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0770"
+    owner: "{{ bind_user }}"
+    group: "{{ bind_group }}"
+  loop:
+    - "{{ bind_secondary_dir }}"
+    - "{{ bind_dir }}/data"
+
+- name: Write TSIG keys
+  ansible.builtin.template:
+    src: tsig-keys.conf.j2
+    dest: "{{ __bind_keys_file }}"
+    owner: root
+    group: "{{ bind_group }}"
+    mode: "0640"
+    setype: named_conf_t
+  no_log: true
+  diff: false
+  when: bind_tsig_keys | length > 0
+  notify: Reload BIND
+
+- name: Remove the TSIG key file when no keys are configured
+  ansible.builtin.file:
+    path: "{{ __bind_keys_file }}"
+    state: absent
+  when: bind_tsig_keys | length == 0
+  notify: Reload BIND
+
+- name: Read hashes of existing zone files
+  ansible.builtin.shell: grep -sH '^; Hash:' -- {{ bind_zone_dir | quote }}/* || true
+  register: __bind_hash_headers
+  changed_when: false
+  check_mode: false
+
+- name: Write primary zone files
+  ansible.builtin.template:
+    src: zone.j2
+    dest: "{{ bind_zone_dir }}/{{ item.name }}"
+    owner: root
+    group: "{{ bind_group }}"
+    mode: "0640"
+    setype: named_zone_t
+    validate: named-checkzone {{ item.name }} %s
+  loop: "{{ __bind_primary_zones }}"
+  loop_control:
+    label: "{{ item.name }}"
+  vars:
+    __bind_content: "{{ item | bind_zone_content(__bind_zone_defaults) }}"
+    __bind_hash: "{{ __bind_content | bind_content_hash }}"
+    __bind_previous: "{{ (__bind_hash_headers.stdout_lines | bind_parse_hashes)[item.name] | default({}) }}"
+    __bind_serial: >-
+      {{ __bind_previous.serial
+         if __bind_previous.hash | default('') == __bind_hash
+         else __bind_previous.serial | default(none) | bind_next_serial(__bind_today) }}
+  notify: Reload BIND
+
+- name: Write the main configuration
+  ansible.builtin.template:
+    src: named.conf.j2
+    dest: "{{ bind_config }}"
+    owner: root
+    group: "{{ bind_group }}"
+    mode: "0640"
+    setype: named_conf_t
+    validate: named-checkconf %s
+  notify: Reload BIND

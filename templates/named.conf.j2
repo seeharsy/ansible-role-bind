@@ -1,0 +1,131 @@
+// {{ ansible_managed }}
+{% macro match_list(items) -%}
+{ {% for i in items %}{{ i }}; {% endfor %}}
+{%- endmacro %}
+{% macro peer_list(items) -%}
+{ {% for p in items %}{% if p is mapping %}{{ p.address }}{% if p.port is defined %} port {{ p.port }}{% endif %}{% if p.key is defined %} key "{{ p.key }}"{% endif %}{% else %}{{ p }}{% endif %}; {% endfor %}}
+{%- endmacro %}
+{% macro yesno(value) -%}
+{{ ('yes' if value else 'no') if value is boolean else value }}
+{%- endmacro %}
+{% set opt = __bind_options %}
+
+{% for acl in bind_acls %}
+acl "{{ acl.name }}" {{ match_list(acl.match) }};
+{% endfor %}
+
+options {
+  directory "{{ bind_dir }}";
+  dump-file "data/cache_dump.db";
+  statistics-file "data/named_stats.txt";
+  memstatistics-file "data/named_mem_stats.txt";
+  managed-keys-directory "{{ __bind_os_managed_keys_dir }}";
+
+  listen-on port {{ __bind_listen.port }} {{ match_list(__bind_listen.ipv4 or ['none']) }};
+  listen-on-v6 port {{ __bind_listen.port }} {{ match_list(__bind_listen.ipv6 or ['none']) }};
+
+  allow-query {{ match_list(opt.allow_query) }};
+  allow-transfer {{ match_list(opt.allow_transfer) }};
+{% if opt.recursion %}
+  recursion yes;
+  allow-recursion {{ match_list(opt.allow_recursion) }};
+{% else %}
+  recursion no;
+{% endif %}
+{% if opt.forwarders %}
+  forwarders {{ match_list(opt.forwarders) }};
+  forward {{ opt.forward }};
+{% endif %}
+
+  dnssec-validation {{ yesno(opt.dnssec_validation) }};
+{% set validate_except = opt.validate_except
+     + (__bind_forward_zones | selectattr('validate', 'defined') | rejectattr('validate') | map(attribute='name') | list) %}
+{% if validate_except %}
+  validate-except { {% for name in validate_except | unique %}"{{ name }}"; {% endfor %}};
+{% endif %}
+{% if opt.query_log %}
+  querylog yes;
+{% endif %}
+{% if bind_options_extra %}
+
+{{ bind_options_extra | indent(2, first=true) }}
+{% endif %}
+};
+
+logging {
+  channel default_log {
+    file "data/named.run" versions 3 size 20m;
+    severity dynamic;
+    print-time yes;
+  };
+  category default { default_log; };
+{% if opt.query_log %}
+  channel query_log {
+    file "data/query.log" versions 5 size 20m;
+    severity info;
+    print-time yes;
+  };
+  category queries { query_log; };
+{% endif %}
+};
+{% if __bind_statistics.enabled %}
+
+statistics-channels {
+  inet {{ __bind_statistics.host }} port {{ __bind_statistics.port }} allow {{ match_list(__bind_statistics.allow) }};
+};
+{% endif %}
+{% if bind_tsig_keys %}
+
+include "{{ __bind_keys_file }}";
+{% endif %}
+{% for server in __bind_server_keys %}
+
+server {{ server.address }} {
+  keys { "{{ server.key }}"; };
+};
+{% endfor %}
+{% if __bind_os_root_hints %}
+
+zone "." IN {
+  type hint;
+  file "{{ __bind_os_root_hints }}";
+};
+{% endif %}
+{% for zone in __bind_primary_zones %}
+
+zone "{{ zone.name }}" IN {
+  type primary;
+  file "{{ bind_zone_dir }}/{{ zone.name }}";
+  notify {{ yesno(zone.notify | default(true)) }};
+{% if zone.also_notify is defined %}
+  also-notify {{ peer_list(zone.also_notify) }};
+{% endif %}
+{% if zone.allow_transfer is defined %}
+  allow-transfer {{ match_list(zone.allow_transfer) }};
+{% endif %}
+  allow-update { none; };
+};
+{% endfor %}
+{% for zone in __bind_secondary_zones %}
+
+zone "{{ zone.name }}" IN {
+  type secondary;
+  primaries {{ peer_list(zone.primaries) }};
+  file "{{ bind_secondary_dir }}/{{ zone.name }}";
+{% if zone.allow_transfer is defined %}
+  allow-transfer {{ match_list(zone.allow_transfer) }};
+{% endif %}
+};
+{% endfor %}
+{% for zone in __bind_forward_zones %}
+
+zone "{{ zone.name }}" IN {
+  type forward;
+  forward {{ zone.forward | default('only') }};
+  forwarders {{ peer_list(zone.forwarders) }};
+};
+{% endfor %}
+
+{% for file in __bind_os_default_includes + bind_extra_include_files %}
+include "{{ file }}";
+{% endfor %}

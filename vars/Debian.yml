@@ -1,34 +1,15 @@
-# Distro specific variables for Debian
 ---
-bind_default_python_version: '3'
-bind_packages:
-  - "{{ ( bind_python_version == '3' ) | ternary( 'python3-netaddr', 'python-netaddr' ) }}"
-  - "{{ ( bind_python_version == '3' ) | ternary( 'python3-dnspython', 'python-dnspython' ) }}"
-  - bind9
-  - bind9utils
-
-bind_service: bind9
-
-# Main config file
-bind_config: /etc/bind/named.conf
-
-# Localhost zone
-bind_default_zone_files:
+__bind_os_packages: [bind9, bind9-utils, bind9-dnsutils]
+__bind_os_service: named
+__bind_os_config: /etc/bind/named.conf
+__bind_os_conf_dir: /etc/bind
+__bind_os_dir: /var/cache/bind
+# AppArmor lets named write to /var/lib/bind and /var/cache/bind.
+__bind_os_zone_dir: /var/lib/bind
+__bind_os_secondary_dir: /var/cache/bind/secondary
+__bind_os_managed_keys_dir: /var/cache/bind
+__bind_os_user: bind
+__bind_os_group: bind
+__bind_os_root_hints: ""
+__bind_os_default_includes:
   - /etc/bind/named.conf.default-zones
-
-# Directory with run-time stuff
-bind_dir: /var/cache/bind
-bind_conf_dir: "/etc/bind"
-auth_file: "auth_transfer.conf"
-bind_auth_file: "{{ bind_conf_dir }}/{{ auth_file }}"
-
-bind_owner: root
-bind_group: bind
-
-bind_bindkeys_file: "/etc/named.iscdlv.key"
-bind_pid_file: "/run/named/named.pid"
-bind_session_keyfile: "/run/named/session.key"
-
-# Custom location for zone files
-bind_zone_dir: "{{ bind_dir }}"
-bind_secondary_dir: "{{ bind_dir }}/secondary"

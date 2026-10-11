@@ -1,0 +1,17 @@
+; {{ ansible_managed }}
+; Hash: {{ __bind_hash }} {{ __bind_serial }}
+$ORIGIN {{ __bind_content.origin }}
+$TTL {{ __bind_content.ttl }}
+@  IN  SOA  {{ __bind_content.soa.mname }} {{ __bind_content.soa.rname }} (
+    {{ __bind_serial }}  ; serial
+    {{ __bind_content.soa.refresh }}  ; refresh
+    {{ __bind_content.soa.retry }}  ; retry
+    {{ __bind_content.soa.expire }}  ; expire
+    {{ __bind_content.soa.minimum }}  ; negative caching TTL
+)
+{% for ns in __bind_content.ns %}
+@  IN  NS  {{ ns }}
+{% endfor %}
+{% for rr in __bind_content.records %}
+{{ rr.name }}  {{ (rr.ttl ~ '  ') if rr.ttl is defined else '' }}IN  {{ rr.type }}  {{ rr.value }}
+{% endfor %}
