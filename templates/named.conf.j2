@@ -2,8 +2,9 @@
 {% macro match_list(items) -%}
 { {% for i in items %}{{ i }}; {% endfor %}}
 {%- endmacro %}
+{# Peers with a tls_name are reached over TLS, on the DoT port unless given. #}
 {% macro peer_list(items) -%}
-{ {% for p in items %}{% if p is mapping %}{{ p.address }}{% if p.port is defined %} port {{ p.port }}{% endif %}{% if p.key is defined %} key "{{ p.key }}"{% endif %}{% else %}{{ p }}{% endif %}; {% endfor %}}
+{ {% for p in items %}{% if p is mapping %}{{ p.address }}{% if p.port is defined %} port {{ p.port }}{% elif p.tls_name is defined %} port {{ __bind_dot.port }}{% endif %}{% if p.key is defined %} key "{{ p.key }}"{% endif %}{% if p.tls_name is defined %} tls "xot-{{ p.tls_name }}"{% endif %}{% else %}{{ p }}{% endif %}; {% endfor %}}
 {%- endmacro %}
 {% macro yesno(value) -%}
 {{ ('yes' if value else 'no') if value is boolean else value }}
@@ -19,6 +20,31 @@
 {% endmacro %}
 {% set opt = __bind_options %}
 
+{% if __bind_dot.enabled or __bind_doh.enabled %}
+tls "server-cert" {
+  cert-file "{{ __bind_tls_cert }}";
+  key-file "{{ __bind_tls_key }}";
+  protocols { {% for p in __bind_tls.protocols %}{{ p }}; {% endfor %}};
+  ciphers "{{ __bind_tls.ciphers }}";
+  prefer-server-ciphers yes;
+  session-tickets no;
+};
+
+{% endif %}
+{% for name in __bind_tls_clients %}
+// Checks the certificate of a primary this server transfers from.
+tls "xot-{{ name }}" {
+  ca-file "{{ __bind_tls_ca }}";
+  remote-hostname "{{ name }}";
+};
+
+{% endfor %}
+{% if __bind_doh.enabled %}
+http "doh" {
+  endpoints { {% for e in __bind_doh.endpoints %}"{{ e }}"; {% endfor %}};
+};
+
+{% endif %}
 {% for acl in bind_acls %}
 acl "{{ acl.name }}" {{ match_list(acl.match) }};
 {% endfor %}
@@ -32,6 +58,14 @@ options {
 
   listen-on port {{ __bind_listen.port }} {{ match_list(__bind_listen.ipv4 or ['none']) }};
   listen-on-v6 port {{ __bind_listen.port }} {{ match_list(__bind_listen.ipv6 or ['none']) }};
+{% if __bind_dot.enabled %}
+  listen-on port {{ __bind_dot.port }} tls "server-cert" {{ match_list(__bind_listen.ipv4 or ['none']) }};
+  listen-on-v6 port {{ __bind_dot.port }} tls "server-cert" {{ match_list(__bind_listen.ipv6 or ['none']) }};
+{% endif %}
+{% if __bind_doh.enabled %}
+  listen-on port {{ __bind_doh.port }} tls "server-cert" http "doh" {{ match_list(__bind_listen.ipv4 or ['none']) }};
+  listen-on-v6 port {{ __bind_doh.port }} tls "server-cert" http "doh" {{ match_list(__bind_listen.ipv6 or ['none']) }};
+{% endif %}
 
   allow-query {{ match_list(opt.allow_query) }};
   allow-transfer {{ match_list(opt.allow_transfer) }};
@@ -129,7 +163,7 @@ zone "{{ zone.name }}" IN {
   also-notify {{ peer_list(zone.also_notify) }};
 {% endif %}
 {% if zone.allow_transfer is defined %}
-  allow-transfer {{ match_list(zone.allow_transfer) }};
+  allow-transfer {% if zone.xot | default(false) %}transport tls {% endif %}{{ match_list(zone.allow_transfer) }};
 {% endif %}
 {{ zone_access(zone) -}}
 {% if zone.update_policy is defined %}

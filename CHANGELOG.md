@@ -24,6 +24,8 @@ names and structure changed; see the README until the migration guide lands.
 - Per-zone `allow_query` (GH-214, GH-218, credit: pixelrebel, Boschung-Mecatronic-AG-Infrastructure).
 - Per-zone and server-wide `zone-statistics` (GH-206, credit: l8gravely).
 - Response rate limiting through `bind_options.rate_limit` (GH-169, credit: rowanthorpe).
+- DNS over TLS (`bind_dot`) and DNS over HTTPS (`bind_doh`) with certificates from your own CA (`bind_tls`).
+- Zone transfers over TLS (`xot: true`), with secondaries checking the primary's certificate.
 - Dynamic zones with TSIG `update_policy`, written once and then left to BIND (GH-177, credit: brunobenchimol).
 - Input validation through `meta/argument_specs.yml`.
 - Unit tests for the filter plugin and a Molecule primary/secondary scenario for EL 9/10, Debian 12/13 and Ubuntu 24.04.
@@ -48,6 +50,7 @@ names and structure changed; see the README until the migration guide lands.
 - Zones sharing a reverse zone must use the same `allow_query`, so PTRs of a restricted zone are not exposed.
 - Dynamic updates need TSIG and an explicit list of record types; IP-based `allow-update` is not supported.
 - Every key a zone refers to must exist in `bind_tsig_keys`.
+- TLS listeners allow TLS 1.2/1.3 with forward-secret AEAD ciphers only, with session tickets off.
 
 ### Removed
 

@@ -62,6 +62,31 @@ argument_specs:
           name: {type: str, required: true, description: Key name.}
           algorithm: {type: str, required: true, description: "HMAC algorithm, e.g. hmac-sha256."}
           secret: {type: str, required: true, no_log: true, description: Base64 secret.}
+      bind_tls:
+        type: dict
+        description: Certificate and TLS settings for DoT, DoH and XoT.
+        options:
+          cert: {type: str, description: PEM server certificate plus intermediates.}
+          key: {type: str, no_log: true, description: PEM private key. Keep it in Ansible Vault.}
+          ca: {type: str, description: PEM CA certificate that signed the primaries' certificates (XoT).}
+          cert_file: {type: str, description: Path on the host instead of cert.}
+          key_file: {type: str, description: Path on the host instead of key.}
+          ca_file: {type: str, description: Path on the host instead of ca.}
+          protocols: {type: list, elements: str, description: "Default [TLSv1.2, TLSv1.3]."}
+          ciphers: {type: str, description: TLS 1.2 cipher list.}
+      bind_dot:
+        type: dict
+        description: DNS over TLS. Missing keys keep their defaults.
+        options:
+          enabled: {type: bool, description: Default false.}
+          port: {type: int, description: Default 853.}
+      bind_doh:
+        type: dict
+        description: DNS over HTTPS. Missing keys keep their defaults.
+        options:
+          enabled: {type: bool, description: Default false.}
+          port: {type: int, description: Default 443.}
+          endpoints: {type: list, elements: str, description: "URL paths. Default [/dns-query]."}
       bind_zone_defaults:
         type: dict
         description: SOA and TTL defaults. Missing keys keep their defaults.
@@ -83,7 +108,7 @@ argument_specs:
           primaries:
             type: list
             elements: raw
-            description: "Addresses secondaries transfer from: strings or {address, key, port}."
+            description: "Addresses secondaries transfer from: strings or {address, key, port, tls_name}."
           name_servers: {type: list, elements: str, description: NS records. Relative names are inside the zone.}
           hostmaster: {type: str, description: Overrides bind_zone_defaults.hostmaster.}
           ttl: {type: raw, description: Overrides the default TTL.}
@@ -106,6 +131,7 @@ argument_specs:
           validate: {type: bool, description: Set false to exempt a forward zone from DNSSEC validation.}
           allow_query: {type: list, elements: str, description: Overrides the global allow_query for this zone.}
           statistics: {type: raw, description: "Per-zone statistics: full, terse or none (or true/false)."}
+          xot: {type: bool, description: Transfer this zone over TLS only.}
           update_policy:
             type: list
             elements: dict

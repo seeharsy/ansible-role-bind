@@ -20,12 +20,12 @@ _SAFE_ZONE_NAME = re.compile(r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*\.?$")
 
 # Forward zones sharing a reverse zone must agree on these, because the
 # reverse zone holds PTRs for all of them under a single policy.
-_SHARED_POLICY = ("primary", "type", "allow_transfer", "allow_query", "primaries")
+_SHARED_POLICY = ("primary", "type", "allow_transfer", "allow_query", "primaries", "xot")
 
 # Settings a reverse zone takes over from the forward zone that declares it.
 # update_policy is deliberately absent: reverse zones are always static.
 _INHERITED = ("type", "primary", "primaries", "allow_transfer", "allow_query", "also_notify",
-              "notify", "ttl", "refresh", "retry", "expire", "minimum")
+              "notify", "ttl", "refresh", "retry", "expire", "minimum", "xot")
 
 _STATISTICS = ("none", "terse", "full")
 
@@ -34,6 +34,8 @@ _STATISTICS = ("none", "terse", "full")
 _UPDATE_MATCH = ("name", "subdomain", "wildcard", "zonesub")
 _UPDATE_NAMELESS = ("zonesub",)
 _RR_TYPE = re.compile(r"^[A-Za-z][A-Za-z0-9]*$")
+# DoH endpoints are URL paths; keep them to plain path characters.
+_DOH_ENDPOINT = re.compile(r"^/[A-Za-z0-9_-]+(/[A-Za-z0-9_-]+)*$")
 _DNS_NAME = re.compile(r"^(\*\.)?[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*\.?$")
 
 _FALLBACK_DEFAULTS = {"hostmaster": "hostmaster"}
@@ -346,6 +348,25 @@ def _check_keys(zone, key_names):
                 f"zone {zone['name']}: key {peer['key']!r} is not defined in bind_tsig_keys")
 
 
+def _check_xot(zone, role):
+    """Zones with xot: true transfer over TLS only."""
+    if role == "primary" and not _as_list(zone.get("allow_transfer")):
+        raise AnsibleFilterError(
+            f"zone {zone['name']}: xot accepts transfers over TLS only, so set allow_transfer "
+            f"to say who may transfer it")
+    if role == "secondary":
+        for peer in _as_list(zone.get("primaries")):
+            if not isinstance(peer, dict) or not peer.get("tls_name"):
+                raise AnsibleFilterError(
+                    f"zone {zone['name']}: xot needs a tls_name on every primaries entry, the name "
+                    f"in that primary's certificate")
+    for peer in _as_list(zone.get("primaries")):
+        if isinstance(peer, dict) and peer.get("tls_name") is not None \
+                and not _DNS_NAME.match(str(peer["tls_name"])):
+            raise AnsibleFilterError(
+                f"zone {zone['name']}: tls_name {peer['tls_name']!r} is not a valid name")
+
+
 def validate_zones(zones, inventory_hostname, defaults=None, local_zones=None, key_names=None):
     defaults = {**_FALLBACK_DEFAULTS, "ttl": 0, "refresh": 0, "retry": 0, "expire": 0,
                 "minimum": 0, **(defaults or {})}
@@ -374,6 +395,8 @@ def validate_zones(zones, inventory_hostname, defaults=None, local_zones=None, k
             raise AnsibleFilterError(
                 f"zone {zone['name']}: this host is a secondary for it, so 'primaries' must "
                 f"list the addresses to transfer from")
+        if zone.get("xot"):
+            _check_xot(zone, role)
         if role == "primary":
             if not _as_list(zone.get("name_servers")):
                 raise AnsibleFilterError(f"zone {zone['name']}: a primary zone needs 'name_servers'")
@@ -406,6 +429,55 @@ def validate_zones(zones, inventory_hostname, defaults=None, local_zones=None, k
 
     for zone in reverse_zones(zones, defaults):
         claim(zone["name"])
+    return True
+
+
+# --- TLS -------------------------------------------------------------------------
+
+def tls_clients(zones, inventory_hostname):
+    """Certificate names of the primaries this host transfers from over TLS."""
+    names = []
+    for zone in zones_with_role(zones, inventory_hostname, "secondary"):
+        for peer in _as_list(zone.get("primaries")):
+            if isinstance(peer, dict) and peer.get("tls_name") and peer["tls_name"] not in names:
+                names.append(peer["tls_name"])
+    return names
+
+
+def _check_pem_source(tls, item):
+    if tls.get(item) and tls.get(f"{item}_file"):
+        raise AnsibleFilterError(f"bind_tls: set {item} or {item}_file, not both")
+    path = tls.get(f"{item}_file")
+    if path and not str(path).startswith("/"):
+        raise AnsibleFilterError(f"bind_tls.{item}_file must be an absolute path, not {path!r}")
+    return bool(tls.get(item) or path)
+
+
+def validate_tls(zones, inventory_hostname, tls, dot, doh):
+    """Check the TLS material this host needs for its listeners and transfers."""
+    tls = tls or {}
+    has_cert = _check_pem_source(tls, "cert")
+    has_key = _check_pem_source(tls, "key")
+    has_ca = _check_pem_source(tls, "ca")
+    if (dot.get("enabled") or doh.get("enabled")) and not (has_cert and has_key):
+        raise AnsibleFilterError(
+            "bind_dot and bind_doh need a certificate and key: set bind_tls.cert and "
+            "bind_tls.key (PEM content), or bind_tls.cert_file and bind_tls.key_file")
+    if doh.get("enabled"):
+        for endpoint in _as_list(doh.get("endpoints")):
+            if not _DOH_ENDPOINT.match(str(endpoint)):
+                raise AnsibleFilterError(
+                    f"bind_doh endpoint {endpoint!r} must be a path such as /dns-query")
+    if not dot.get("enabled"):
+        for zone in zones_with_role(zones, inventory_hostname, "primary"):
+            if zone.get("xot"):
+                raise AnsibleFilterError(
+                    f"zone {zone['name']}: xot transfers use the DoT listener, so enable bind_dot "
+                    f"on {inventory_hostname}")
+    if tls_clients(zones, inventory_hostname) and not has_ca:
+        raise AnsibleFilterError(
+            "this host transfers zones over TLS, so set bind_tls.ca or bind_tls.ca_file to the "
+            "CA that signed its primaries' certificates")
     return True
 
 
@@ -476,4 +548,6 @@ class FilterModule:
             "bind_zone_statistics": zone_statistics,
             "bind_update_policy": update_policy,
             "bind_local_zone_content": local_zone_content,
+            "bind_tls_clients": tls_clients,
+            "bind_validate_tls": validate_tls,
         }

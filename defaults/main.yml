@@ -35,6 +35,29 @@ bind_tsig_keys: []
 #    algorithm: hmac-sha256
 #    secret: "{{ vault_bind_xfer_secret }}"
 
+# Certificate for DoT, DoH and XoT, from your CA. Give PEM content (keep the
+# key in Ansible Vault) or paths to files already on the host, not both.
+bind_tls: {}
+#  cert: "{{ lookup('file', 'pki/ns1.pem') }}"   # server certificate + intermediates
+#  key: "{{ vault_bind_tls_key }}"
+#  ca: "{{ lookup('file', 'pki/ca.pem') }}"      # CA that signed the primaries, for XoT
+#  cert_file: /etc/pki/tls/certs/ns1.pem        # instead of cert
+#  key_file: /etc/pki/tls/private/ns1.key       # instead of key
+#  ca_file: /etc/pki/tls/certs/ca.pem           # instead of ca
+#  protocols: [TLSv1.2, TLSv1.3]
+#  ciphers: "ECDHE+AESGCM:ECDHE+CHACHA20:!aNULL:!SHA1:!SHA256:!SHA384"   # TLS 1.2 only
+
+# DNS over TLS, on the bind_listen addresses.
+bind_dot: {}
+#  enabled: false
+#  port: 853
+
+# DNS over HTTPS, on the bind_listen addresses.
+bind_doh: {}
+#  enabled: false
+#  port: 443
+#  endpoints: [/dns-query]
+
 # SOA and TTL defaults. Each zone can override any of these.
 bind_zone_defaults: {}
 #  ttl: 1h

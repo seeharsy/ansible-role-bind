@@ -32,6 +32,12 @@
     quiet: true
   tags: bind
 
+- name: Validate TLS settings
+  ansible.builtin.assert:
+    that: bind_zones | bind_validate_tls(inventory_hostname, __bind_tls, __bind_dot, __bind_doh)
+    quiet: true
+  tags: bind
+
 - name: Validate TSIG keys
   ansible.builtin.assert:
     that:
