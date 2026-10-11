@@ -24,7 +24,11 @@
 
 - name: Validate zone definitions
   ansible.builtin.assert:
-    that: bind_zones | bind_validate_zones(inventory_hostname, __bind_zone_defaults)
+    that:
+      - >-
+        bind_zones | bind_validate_zones(inventory_hostname, __bind_zone_defaults,
+        bind_local_zones, bind_tsig_keys | map(attribute='name') | list)
+      - __bind_options.zone_statistics | bind_zone_statistics is not false
     quiet: true
   tags: bind
 

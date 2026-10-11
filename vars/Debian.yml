@@ -8,6 +8,7 @@ __bind_os_dir: /var/cache/bind
 __bind_os_zone_dir: /var/lib/bind
 __bind_os_secondary_dir: /var/cache/bind/secondary
 __bind_os_managed_keys_dir: /var/cache/bind
+__bind_os_dynamic_dir: /var/lib/bind/dynamic
 __bind_os_user: bind
 __bind_os_group: bind
 __bind_os_root_hints: ""

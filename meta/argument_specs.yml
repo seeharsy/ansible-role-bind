@@ -30,6 +30,26 @@ argument_specs:
           dnssec_validation: {type: raw, description: "auto (default), yes or no."}
           validate_except: {type: list, elements: str, description: Names exempt from DNSSEC validation.}
           query_log: {type: bool, description: Log queries to data/query.log. Default false.}
+          zone_statistics: {type: raw, description: "full, terse or none (or true/false). Unset keeps BIND's default, terse."}
+          rate_limit:
+            type: dict
+            description: Response rate limiting. Off unless set.
+            options:
+              responses_per_second: {type: int, description: Identical responses per second per client network.}
+              referrals_per_second: {type: int, description: Referrals per second.}
+              nodata_per_second: {type: int, description: NODATA responses per second.}
+              nxdomains_per_second: {type: int, description: NXDOMAIN responses per second.}
+              errors_per_second: {type: int, description: Error responses per second.}
+              all_per_second: {type: int, description: All responses per second.}
+              window: {type: int, description: Seconds over which rates are averaged.}
+              slip: {type: int, description: Every Nth dropped response is sent truncated instead.}
+              qps_scale: {type: int, description: Scale limits down as total queries per second rise.}
+              ipv4_prefix_length: {type: int, description: Client IPv4 prefix length counted together.}
+              ipv6_prefix_length: {type: int, description: Client IPv6 prefix length counted together.}
+              exempt_clients: {type: list, elements: str, description: Clients never limited.}
+              log_only: {type: bool, description: Log what would be limited without limiting it.}
+              max_table_size: {type: int, description: Maximum entries in the rate table.}
+              min_table_size: {type: int, description: Entries preallocated in the rate table.}
       bind_options_extra:
         type: str
         description: Raw statements appended inside the options block.
@@ -84,6 +104,18 @@ argument_specs:
             description: Forward zone targets.
           forward: {type: str, choices: [first, only], description: Forward zone mode. Default only.}
           validate: {type: bool, description: Set false to exempt a forward zone from DNSSEC validation.}
+          allow_query: {type: list, elements: str, description: Overrides the global allow_query for this zone.}
+          statistics: {type: raw, description: "Per-zone statistics: full, terse or none (or true/false)."}
+          update_policy:
+            type: list
+            elements: dict
+            description: Makes the zone dynamic. TSIG-signed updates allowed by these rules.
+            options:
+              action: {type: str, choices: [grant, deny], description: Default grant.}
+              key: {type: str, required: true, description: Name of a key in bind_tsig_keys.}
+              match: {type: str, required: true, choices: [name, subdomain, wildcard, zonesub], description: Which names the rule covers.}
+              name: {type: str, description: "Name for name, subdomain and wildcard matches."}
+              types: {type: list, elements: str, required: true, description: Record types the key may change.}
           hosts:
             type: list
             elements: dict
@@ -104,6 +136,23 @@ argument_specs:
               type: {type: str, required: true, description: RR type.}
               value: {type: str, required: true, description: RDATA exactly as it appears in a zone file.}
               ttl: {type: raw, description: Record TTL.}
+      bind_local_zones:
+        type: list
+        elements: dict
+        description: Zones every server answers by itself.
+        options:
+          name: {type: str, required: true, description: Zone name.}
+          records:
+            type: list
+            elements: dict
+            description: Records. Without any, every name in the zone is NXDOMAIN.
+            options:
+              name: {type: str, required: true, description: Owner name; '@' for the zone apex.}
+              type: {type: str, required: true, description: RR type.}
+              value: {type: str, required: true, description: RDATA exactly as it appears in a zone file.}
+              ttl: {type: raw, description: Record TTL.}
+          allow_query: {type: list, elements: str, description: Overrides the global allow_query for this zone.}
+          statistics: {type: raw, description: "full, terse or none (or true/false)."}
       bind_statistics:
         type: dict
         description: Statistics channel. Missing keys keep their defaults.
