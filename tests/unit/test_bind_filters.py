@@ -408,3 +408,175 @@ class TestZoneNameSafety:
     @pytest.mark.parametrize("name", ["example.test", "example.test.", "_msdcs.corp.test", "xn--bcher-kva.test", "com"])
     def test_safe_names_pass(self, name):
         assert bind.validate_zones([{"name": name, "type": "forward", "forwarders": ["192.0.2.1"]}], "ns1")
+
+
+# --- local zones --------------------------------------------------------------
+
+class TestLocalZones:
+    zones = [
+        {"name": "example.test", "primary": "ns1", "name_servers": ["ns1"],
+         "reverse_zones": ["192.0.2.0/24"]},
+    ]
+
+    def test_valid_local_zones_pass(self):
+        assert bind.validate_zones(self.zones, "ns1", local_zones=[{"name": "blocked.test"}])
+
+    def test_local_zone_clashing_with_a_zone_is_an_error(self):
+        with pytest.raises(AnsibleFilterError, match="example.test.*more than once"):
+            bind.validate_zones(self.zones, "ns1", local_zones=[{"name": "example.test."}])
+
+    def test_local_zone_clashing_with_a_reverse_zone_is_an_error(self):
+        with pytest.raises(AnsibleFilterError, match="2.0.192.in-addr.arpa.*more than once"):
+            bind.validate_zones(self.zones, "ns1", local_zones=[{"name": "2.0.192.in-addr.arpa"}])
+
+    def test_duplicate_local_zones_are_an_error(self):
+        with pytest.raises(AnsibleFilterError, match="more than once"):
+            bind.validate_zones([], "ns1", local_zones=[{"name": "a.test"}, {"name": "A.test"}])
+
+    def test_unsafe_local_zone_name_is_rejected(self):
+        with pytest.raises(AnsibleFilterError, match="zone names may contain only"):
+            bind.validate_zones([], "ns1", local_zones=[{"name": "../x"}])
+
+    def test_local_zone_content_points_ns_at_localhost(self):
+        c = bind.local_zone_content(
+            {"name": "sink.test", "records": [{"name": "*", "type": "a", "value": "192.0.2.1"}]}, DEFAULTS)
+        assert c["ns"] == ["localhost."]
+        assert c["soa"]["mname"] == "localhost."
+        assert c["records"] == [{"name": "*", "type": "A", "value": "192.0.2.1"}]
+
+    def test_local_zone_records_are_validated(self):
+        with pytest.raises(AnsibleFilterError, match="sink.test"):
+            bind.validate_zones([], "ns1", local_zones=[{"name": "sink.test", "records": [{"name": "x"}]}])
+
+
+class TestExplicitZoneClashes:
+    def test_explicit_zone_clashing_with_a_derived_reverse_zone_is_an_error(self):
+        zones = [
+            {"name": "example.test", "primary": "ns1", "name_servers": ["ns1"],
+             "reverse_zones": ["192.0.2.0/24"]},
+            {"name": "2.0.192.in-addr.arpa", "primary": "ns1", "name_servers": ["ns1.example.test."]},
+        ]
+        with pytest.raises(AnsibleFilterError, match="more than once"):
+            bind.validate_zones(zones, "ns1")
+
+
+# --- per-zone allow_query -----------------------------------------------------
+
+class TestAllowQuery:
+    def zones(self):
+        return [
+            {"name": "a.test", "primary": "ns1", "name_servers": ["ns1"],
+             "allow_query": ["clients"], "reverse_zones": ["192.0.2.0/24"]},
+            {"name": "b.test", "primary": "ns1", "name_servers": ["ns1"],
+             "allow_query": ["clients"], "reverse_zones": ["192.0.2.0/24"]},
+        ]
+
+    def test_reverse_zone_inherits_allow_query(self):
+        assert bind.reverse_zones(self.zones())[0]["allow_query"] == ["clients"]
+
+    def test_shared_cidr_with_different_allow_query_is_an_error(self):
+        zones = self.zones()
+        zones[1]["allow_query"] = ["any"]
+        with pytest.raises(AnsibleFilterError, match="allow_query"):
+            bind.reverse_zones(zones)
+
+    def test_forward_zone_with_allow_query_is_an_error(self):
+        zone = {"name": "f.test", "type": "forward", "forwarders": ["192.0.2.1"], "allow_query": ["any"]}
+        with pytest.raises(AnsibleFilterError, match="allow_recursion"):
+            bind.validate_zones([zone], "ns1")
+
+
+# --- statistics ---------------------------------------------------------------
+
+class TestZoneStatistics:
+    @pytest.mark.parametrize("value,level", [
+        (True, "full"), (False, "none"), ("full", "full"), ("terse", "terse"),
+        ("none", "none"), ("yes", "full"), ("no", "none"), (None, None),
+    ])
+    def test_levels(self, value, level):
+        assert bind.zone_statistics(value) == level
+
+    def test_invalid_level_is_an_error(self):
+        with pytest.raises(AnsibleFilterError, match="full, terse or none"):
+            bind.zone_statistics("verbose")
+
+    def test_forward_zone_with_statistics_is_an_error(self):
+        zone = {"name": "f.test", "type": "forward", "forwarders": ["192.0.2.1"], "statistics": True}
+        with pytest.raises(AnsibleFilterError, match="forward zones do not take statistics"):
+            bind.validate_zones([zone], "ns1")
+
+    def test_invalid_zone_level_is_reported_by_validation(self):
+        zone = {"name": "a.test", "primary": "ns1", "name_servers": ["ns1"], "statistics": "loud"}
+        with pytest.raises(AnsibleFilterError, match="a.test"):
+            bind.validate_zones([zone], "ns1")
+
+    def test_reverse_zone_takes_the_most_detailed_level(self):
+        zones = [
+            {"name": "a.test", "primary": "ns1", "statistics": "terse", "reverse_zones": ["192.0.2.0/24"]},
+            {"name": "b.test", "primary": "ns1", "statistics": True, "reverse_zones": ["192.0.2.0/24"]},
+            {"name": "c.test", "primary": "ns1", "reverse_zones": ["192.0.2.0/24"]},
+        ]
+        assert bind.reverse_zones(zones)[0]["statistics"] == "full"
+
+    def test_reverse_zone_without_statistics_has_none_set(self):
+        zones = [{"name": "a.test", "primary": "ns1", "reverse_zones": ["192.0.2.0/24"]}]
+        assert "statistics" not in bind.reverse_zones(zones)[0]
+
+
+# --- dynamic zones ------------------------------------------------------------
+
+class TestUpdatePolicy:
+    def zone(self, policy):
+        return {"name": "dyn.test", "primary": "ns1", "name_servers": ["ns1"], "update_policy": policy}
+
+    def test_rules_render(self):
+        policy = [
+            {"key": "ddns", "match": "zonesub", "types": ["A", "aaaa", "TXT"]},
+            {"key": "acme", "match": "name", "name": "_acme-challenge.dyn.test", "types": ["TXT"]},
+            {"action": "deny", "key": "ddns", "match": "subdomain", "name": "infra.dyn.test.", "types": ["ANY"]},
+        ]
+        assert bind.update_policy(policy) == [
+            'grant "ddns" zonesub A AAAA TXT',
+            'grant "acme" name _acme-challenge.dyn.test. TXT',
+            'deny "ddns" subdomain infra.dyn.test. ANY',
+        ]
+
+    def test_dynamic_zone_passes_validation(self):
+        policy = [{"key": "ddns", "match": "zonesub", "types": ["A"]}]
+        assert bind.validate_zones([self.zone(policy)], "ns1", key_names=["ddns"])
+
+    @pytest.mark.parametrize("rule,message", [
+        ({"key": "ddns", "match": "zonesub"}, "types"),
+        ({"key": "ddns", "match": "zonesub", "types": []}, "types"),
+        ({"key": "ddns", "match": "zonesub", "types": ["A;"]}, "record type"),
+        ({"match": "zonesub", "types": ["A"]}, "key"),
+        ({"key": "ddns", "match": "krb5-self", "types": ["A"]}, "match"),
+        ({"key": "ddns", "match": "name", "types": ["A"]}, "needs a 'name'"),
+        ({"key": "ddns", "match": "zonesub", "name": "x.dyn.test", "types": ["A"]}, "takes no 'name'"),
+        ({"key": "ddns", "match": "name", "name": "x; }; include", "types": ["A"]}, "not a valid name"),
+        ({"action": "allow", "key": "ddns", "match": "zonesub", "types": ["A"]}, "grant or deny"),
+    ])
+    def test_invalid_rules_are_rejected(self, rule, message):
+        with pytest.raises(AnsibleFilterError, match=message):
+            bind.validate_zones([self.zone([rule])], "ns1", key_names=["ddns"])
+
+    def test_unknown_key_is_rejected(self):
+        policy = [{"key": "nope", "match": "zonesub", "types": ["A"]}]
+        with pytest.raises(AnsibleFilterError, match="nope.*bind_tsig_keys"):
+            bind.validate_zones([self.zone(policy)], "ns1", key_names=["ddns"])
+
+    def test_reverse_zones_of_a_dynamic_zone_are_static(self):
+        zone = self.zone([{"key": "ddns", "match": "zonesub", "types": ["A"]}])
+        zone["reverse_zones"] = ["192.0.2.0/24"]
+        assert "update_policy" not in bind.reverse_zones([zone])[0]
+
+
+class TestKeyReferences:
+    def test_unknown_key_in_primaries_is_rejected(self):
+        zone = {"name": "a.test", "primary": "ns1", "primaries": [{"address": "192.0.2.1", "key": "nope"}]}
+        with pytest.raises(AnsibleFilterError, match="nope"):
+            bind.validate_zones([zone], "ns2", key_names=["xfer"])
+
+    def test_key_checks_are_skipped_without_key_names(self):
+        zone = {"name": "a.test", "primary": "ns1", "primaries": [{"address": "192.0.2.1", "key": "nope"}]}
+        assert bind.validate_zones([zone], "ns2")

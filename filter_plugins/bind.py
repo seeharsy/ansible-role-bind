@@ -20,11 +20,21 @@ _SAFE_ZONE_NAME = re.compile(r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*\.?$")
 
 # Forward zones sharing a reverse zone must agree on these, because the
 # reverse zone holds PTRs for all of them under a single policy.
-_SHARED_POLICY = ("primary", "type", "allow_transfer", "primaries")
+_SHARED_POLICY = ("primary", "type", "allow_transfer", "allow_query", "primaries")
 
 # Settings a reverse zone takes over from the forward zone that declares it.
-_INHERITED = ("type", "primary", "primaries", "allow_transfer", "also_notify", "notify",
-              "ttl", "refresh", "retry", "expire", "minimum")
+# update_policy is deliberately absent: reverse zones are always static.
+_INHERITED = ("type", "primary", "primaries", "allow_transfer", "allow_query", "also_notify",
+              "notify", "ttl", "refresh", "retry", "expire", "minimum")
+
+_STATISTICS = ("none", "terse", "full")
+
+# update-policy rules: match types that work with TSIG keys, and the ones that
+# apply to the whole zone and so take no name.
+_UPDATE_MATCH = ("name", "subdomain", "wildcard", "zonesub")
+_UPDATE_NAMELESS = ("zonesub",)
+_RR_TYPE = re.compile(r"^[A-Za-z][A-Za-z0-9]*$")
+_DNS_NAME = re.compile(r"^(\*\.)?[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*\.?$")
 
 _FALLBACK_DEFAULTS = {"hostmaster": "hostmaster"}
 
@@ -126,6 +136,61 @@ def zone_role(zone, inventory_hostname):
         f"hostname of its primary server, or set 'type'")
 
 
+# --- statistics -----------------------------------------------------------------
+
+def zone_statistics(value):
+    """Map a statistics setting to BIND's zone-statistics level, or None if unset."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return "full" if value else "none"
+    value = {"yes": "full", "true": "full", "no": "none", "false": "none"}.get(str(value).lower(), value)
+    if value not in _STATISTICS:
+        raise AnsibleFilterError(f"statistics must be full, terse or none (or true/false), not {value!r}")
+    return value
+
+
+# --- dynamic updates ---------------------------------------------------------------
+
+def update_policy(rules, key_names=None):
+    """Render update-policy rules as BIND grant/deny statements."""
+    lines = []
+    for rule in _as_list(rules):
+        action = rule.get("action", "grant")
+        if action not in ("grant", "deny"):
+            raise AnsibleFilterError(f"update_policy action must be grant or deny, not {action!r}")
+        key = rule.get("key")
+        if not key:
+            raise AnsibleFilterError("every update_policy rule needs the 'key' it applies to")
+        if key_names is not None and key not in key_names:
+            raise AnsibleFilterError(f"update_policy key {key!r} is not defined in bind_tsig_keys")
+        match = rule.get("match")
+        if match not in _UPDATE_MATCH:
+            raise AnsibleFilterError(
+                f"update_policy match must be one of {', '.join(_UPDATE_MATCH)}, not {match!r}")
+        parts = [action, f'"{key}"', match]
+        name = rule.get("name")
+        if match in _UPDATE_NAMELESS:
+            if name is not None:
+                raise AnsibleFilterError(f"update_policy match {match} takes no 'name'")
+        else:
+            if not name:
+                raise AnsibleFilterError(f"update_policy match {match} needs a 'name'")
+            if not _DNS_NAME.match(str(name)):
+                raise AnsibleFilterError(f"update_policy name {name!r} is not a valid name")
+            parts.append(_origin(name))
+        types = _as_list(rule.get("types"))
+        if not types:
+            raise AnsibleFilterError(
+                "every update_policy rule needs 'types', the record types the key may change")
+        for rtype in types:
+            if not _RR_TYPE.match(str(rtype)):
+                raise AnsibleFilterError(f"update_policy: {rtype!r} is not a record type")
+        parts.extend(str(t).upper() for t in types)
+        lines.append(" ".join(parts))
+    return lines
+
+
 # --- serial ------------------------------------------------------------------------
 
 def next_serial(current, today):
@@ -159,6 +224,11 @@ def _host_records(zone_name, host):
     return records
 
 
+def local_zone_content(zone, defaults):
+    """A local zone is served by every host with itself as the only name server."""
+    return zone_content({**zone, "name_servers": ["localhost."], "hosts": []}, defaults)
+
+
 def zone_content(zone, defaults):
     origin = _origin(zone["name"])
     ns = [_fqdn(n, origin) for n in _as_list(zone.get("name_servers"))]
@@ -166,6 +236,10 @@ def zone_content(zone, defaults):
     for host in _as_list(zone.get("hosts")):
         records.extend(_host_records(zone["name"], host))
     for rec in _as_list(zone.get("records")):
+        missing = [k for k in ("name", "type", "value") if k not in rec]
+        if missing:
+            raise AnsibleFilterError(
+                f"zone {zone['name']}: record {rec.get('name', '?')!r} needs {', '.join(missing)}")
         out = {"name": rec["name"], "type": str(rec["type"]).upper(), "value": rec["value"]}
         if "ttl" in rec:
             out["ttl"] = rec["ttl"]
@@ -188,6 +262,10 @@ def zone_content(zone, defaults):
 
 # --- reverse zones ---------------------------------------------------------------
 
+def _most_detailed(*levels):
+    found = [zone_statistics(v) for v in levels if zone_statistics(v) is not None]
+    return max(found, key=_STATISTICS.index) if found else None
+
 def reverse_zones(zones, defaults=None):
     defaults = defaults or _FALLBACK_DEFAULTS
     found = {}   # zone name -> {"net": network, "zone": dict, "source": forward zone name}
@@ -204,8 +282,13 @@ def reverse_zones(zones, defaults=None):
                                 f"reverse zone {rname} is declared by zones {first['source']} and "
                                 f"{fwd['name']} with different '{key}' settings; zones sharing a "
                                 f"reverse zone must use the same {', '.join(_SHARED_POLICY)}")
+                    level = _most_detailed(first["zone"].get("statistics"), fwd.get("statistics"))
+                    if level is not None:
+                        first["zone"]["statistics"] = level
                     continue
                 rz = {k: fwd[k] for k in _INHERITED if k in fwd}
+                if zone_statistics(fwd.get("statistics")) is not None:
+                    rz["statistics"] = zone_statistics(fwd["statistics"])
                 rz["name"] = rname
                 rz["name_servers"] = [_fqdn(n, origin) for n in _as_list(fwd.get("name_servers"))]
                 rz["hostmaster"] = _rname(fwd.get("hostmaster", defaults["hostmaster"]), origin)
@@ -247,22 +330,45 @@ def reverse_zones(zones, defaults=None):
 
 # --- validation --------------------------------------------------------------------
 
-def validate_zones(zones, inventory_hostname, defaults=None):
+def _check_name(name, where):
+    if not name:
+        raise AnsibleFilterError(f"every entry in {where} needs a 'name'")
+    if not _SAFE_ZONE_NAME.match(str(name)):
+        raise AnsibleFilterError(
+            f"zone {name!r}: zone names may contain only letters, digits, '-', '_' "
+            f"and single dots between labels")
+
+
+def _check_keys(zone, key_names):
+    for peer in _as_list(zone.get("primaries")) + _as_list(zone.get("also_notify")):
+        if isinstance(peer, dict) and peer.get("key") and peer["key"] not in key_names:
+            raise AnsibleFilterError(
+                f"zone {zone['name']}: key {peer['key']!r} is not defined in bind_tsig_keys")
+
+
+def validate_zones(zones, inventory_hostname, defaults=None, local_zones=None, key_names=None):
     defaults = {**_FALLBACK_DEFAULTS, "ttl": 0, "refresh": 0, "retry": 0, "expire": 0,
                 "minimum": 0, **(defaults or {})}
     seen = set()
-    for zone in _as_list(zones):
-        if not zone.get("name"):
-            raise AnsibleFilterError("every entry in bind_zones needs a 'name'")
-        if not _SAFE_ZONE_NAME.match(str(zone["name"])):
-            raise AnsibleFilterError(
-                f"zone {zone['name']!r}: zone names may contain only letters, digits, '-', '_' "
-                f"and single dots between labels")
-        key = _origin(zone["name"]).lower()
+
+    def claim(name):
+        key = _origin(name).lower()
         if key in seen:
-            raise AnsibleFilterError(f"zone {zone['name']}: duplicate zone name in bind_zones")
+            raise AnsibleFilterError(
+                f"zone {name}: defined more than once across bind_zones, their reverse zones "
+                f"and bind_local_zones (duplicate zone)")
         seen.add(key)
+
+    for where, entries in (("bind_zones", zones), ("bind_local_zones", local_zones)):
+        for zone in _as_list(entries):
+            _check_name(zone.get("name"), where)
+            claim(zone["name"])
+
     for zone in _as_list(zones):
+        try:
+            zone_statistics(zone.get("statistics"))
+        except AnsibleFilterError as exc:
+            raise AnsibleFilterError(f"zone {zone['name']}: {exc}") from exc
         role = zone_role(zone, inventory_hostname)
         if role == "secondary" and not _as_list(zone.get("primaries")):
             raise AnsibleFilterError(
@@ -272,9 +378,34 @@ def validate_zones(zones, inventory_hostname, defaults=None):
             if not _as_list(zone.get("name_servers")):
                 raise AnsibleFilterError(f"zone {zone['name']}: a primary zone needs 'name_servers'")
             zone_content(zone, defaults)
-        if role == "forward" and not _as_list(zone.get("forwarders")):
-            raise AnsibleFilterError(f"zone {zone['name']}: a forward zone needs 'forwarders'")
-    reverse_zones(zones, defaults)
+        if role == "forward":
+            if not _as_list(zone.get("forwarders")):
+                raise AnsibleFilterError(f"zone {zone['name']}: a forward zone needs 'forwarders'")
+            if "allow_query" in zone:
+                raise AnsibleFilterError(
+                    f"zone {zone['name']}: forward zones do not take allow_query; who may use "
+                    f"them is set by bind_options.allow_recursion")
+            if "statistics" in zone:
+                raise AnsibleFilterError(
+                    f"zone {zone['name']}: forward zones do not take statistics; their queries "
+                    f"are counted in the server-wide resolver statistics")
+        if "update_policy" in zone:
+            try:
+                update_policy(zone["update_policy"], key_names)
+            except AnsibleFilterError as exc:
+                raise AnsibleFilterError(f"zone {zone['name']}: {exc}") from exc
+        if key_names is not None:
+            _check_keys(zone, key_names)
+
+    for zone in _as_list(local_zones):
+        try:
+            zone_statistics(zone.get("statistics"))
+            local_zone_content(zone, defaults)
+        except AnsibleFilterError as exc:
+            raise AnsibleFilterError(f"local zone {zone['name']}: {exc}") from exc
+
+    for zone in reverse_zones(zones, defaults):
+        claim(zone["name"])
     return True
 
 
@@ -342,4 +473,7 @@ class FilterModule:
             "bind_addresses": addresses,
             "bind_parse_hashes": parse_hashes,
             "bind_zones_with_role": zones_with_role,
+            "bind_zone_statistics": zone_statistics,
+            "bind_update_policy": update_policy,
+            "bind_local_zone_content": local_zone_content,
         }

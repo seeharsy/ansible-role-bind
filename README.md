@@ -118,15 +118,18 @@ run with a list of valid keys.
 | `bind_options.dnssec_validation` | `auto` | `auto`, `yes` (bring your own `trust-anchors`) or `no`. |
 | `bind_options.validate_except` | `[]` | Names exempt from DNSSEC validation. |
 | `bind_options.query_log` | `false` | Log queries to `data/query.log`. |
+| `bind_options.zone_statistics` | unset (BIND: `terse`) | Statistics level for every zone: `full`, `terse` or `none`. See [Statistics](#statistics). |
+| `bind_options.rate_limit` | off | Response rate limiting. See [Response rate limiting](#response-rate-limiting). |
 | `bind_options_extra` | `""` | Raw statements appended inside `options { }`. |
 | `bind_tsig_keys` | `[]` | `{name, algorithm, secret}`. Written to a separate `0640 root:named` file, never logged. |
+| `bind_local_zones` | `[]` | Zones every server answers by itself. See [Local zones](#local-zones). |
 | `bind_statistics` | disabled | `{enabled, host, port, allow}` for the statistics channel. |
 | `bind_extra_include_files` | `[]` | Files included at the end of `named.conf`. |
 | `bind_package_state` | `present` | `latest` upgrades BIND on every run. |
 
 Paths, package and service names (`bind_packages`, `bind_service`,
 `bind_config`, `bind_conf_dir`, `bind_dir`, `bind_zone_dir`,
-`bind_secondary_dir`, `bind_user`, `bind_group`) default to the platform's
+`bind_secondary_dir`, `bind_dynamic_dir`, `bind_user`, `bind_group`) default to the platform's
 values and can be overridden.
 
 ### SOA defaults
@@ -154,6 +157,9 @@ it. It accepts a name (`hostmaster` becomes `hostmaster.<zone>.`), an FQDN, or
 | `records` | `{name, type, value, ttl}` for any other record type. `value` is written exactly as given. |
 | `forwarders`, `forward` | Forward zone targets and mode (`only` by default). |
 | `validate` | `false` exempts a forward zone from DNSSEC validation. |
+| `allow_query` | Who may query this zone. Overrides `bind_options.allow_query`. Not for forward zones. |
+| `statistics` | `full`, `terse` or `none` (or `true`/`false`). Not for forward zones. |
+| `update_policy` | Makes the zone dynamic. See [Dynamic zones](#dynamic-zones). |
 | `ttl`, `refresh`, `retry`, `expire`, `minimum`, `hostmaster` | Per-zone overrides. |
 
 ### Reverse zones and PTRs
@@ -167,9 +173,11 @@ it. It accepts a name (`hostmaster` becomes `hostmaster.<zone>.`), an FQDN, or
   `/38` becomes four `/40` zones.
 - Several forward zones may list the same CIDR. The reverse zone is generated
   once, with PTRs for the hosts of every zone. Because one reverse zone has one
-  transfer policy, zones that share a CIDR must use the same `primary`,
-  `type`, `primaries` and `allow_transfer`; otherwise the run stops with an
-  error naming both zones.
+  set of access rules, zones that share a CIDR must use the same `primary`,
+  `type`, `primaries`, `allow_transfer` and `allow_query`; otherwise the run
+  stops with an error naming both zones.
+- A reverse zone takes the most detailed `statistics` level of the zones that
+  share it.
 - Every address of every host gets a PTR, except wildcard names and hosts with
   `ptr: false`. When several hosts share an address, the first one wins unless
   another sets `ptr: true`.
@@ -187,6 +195,115 @@ On a network with no route to the internet, recursion cannot reach the root
 servers to validate anything. Set `bind_options.dnssec_validation: "no"` there,
 or exempt the names your forwarders serve.
 
+### Local zones
+
+`bind_local_zones` lists zones that every server running the role answers by
+itself, with no transfers, no NOTIFY and no updates. Use them to make lookups
+for names that can never resolve fail at once, for example on a network with
+no internet access, where clients would otherwise wait for timeouts.
+
+```yaml
+bind_local_zones:
+  - name: example.com              # every name inside is NXDOMAIN
+  - name: telemetry.example
+    statistics: full               # count who still asks for it
+  - name: sinkhole.example
+    records:
+      - {name: "*", type: A, value: 192.0.2.1}
+```
+
+- Zones without `records` share one empty zone file, so nothing inside them
+  exists. Zones with `records` get their own file.
+- `allow_query` and `statistics` work as they do in `bind_zones`.
+- A name may appear in only one of `bind_zones`, their generated reverse zones
+  and `bind_local_zones`.
+- Recursive clients get the local answer, not the real one. A client that
+  validates DNSSEC itself will treat answers for a signed public name as
+  bogus, which still fails the lookup but with SERVFAIL instead of NXDOMAIN.
+
+### Statistics
+
+`zone_statistics` (server-wide) and a zone's `statistics` set how much BIND
+records per zone:
+
+| Level | What is recorded |
+|---|---|
+| `none` | Nothing. The zone does not appear in the statistics. |
+| `terse` | Serial and load time. BIND's default. |
+| `full` | Per-zone query counters by response code and record type, transfers and NOTIFY. |
+
+`full` keeps extra counters in memory for each zone. Read the counters from the
+statistics channel (`bind_statistics`), for example
+`curl http://127.0.0.1:8053/json/v1/zones`. The channel is plain HTTP without
+authentication and shows your zone names, so keep it on `127.0.0.1`. To send
+the numbers to Prometheus, run `bind_exporter` on each server against the
+local channel and expose only the exporter.
+
+### Response rate limiting
+
+`bind_options.rate_limit` turns on RRL, which limits identical responses to one
+client network. It protects authoritative servers on the internet from being
+used to amplify attacks. Keys are BIND's `rate-limit` options with
+underscores:
+
+```yaml
+bind_options:
+  rate_limit:
+    responses_per_second: 10
+    window: 5
+    exempt_clients: [clients]      # your own resolvers and clients
+    log_only: true                 # watch the logs before enforcing
+```
+
+Valid keys: `responses_per_second`, `referrals_per_second`,
+`nodata_per_second`, `nxdomains_per_second`, `errors_per_second`,
+`all_per_second`, `window`, `slip`, `qps_scale`, `ipv4_prefix_length`,
+`ipv6_prefix_length`, `exempt_clients`, `log_only`, `max_table_size` and
+`min_table_size`. A server that only answers your own network rarely needs
+RRL; if you enable it, exempt your clients, because many clients behind one
+NAT address look like one client.
+
+### Dynamic zones
+
+A zone with `update_policy` accepts updates signed with a TSIG key, for
+example from a DHCP server or an ACME client:
+
+```yaml
+bind_tsig_keys:
+  - {name: dhcp, algorithm: hmac-sha256, secret: "{{ vault_bind_dhcp_secret }}"}
+  - {name: acme, algorithm: hmac-sha256, secret: "{{ vault_bind_acme_secret }}"}
+
+bind_zones:
+  - name: dyn.example.internal
+    primary: ns1
+    name_servers: [ns1.example.internal., ns2.example.internal.]
+    primaries: [{address: 192.0.2.11, key: xfer}]
+    allow_transfer: ["key xfer"]
+    update_policy:
+      - {key: dhcp, match: zonesub, types: [A, AAAA, TXT, DHCID]}
+      - {key: acme, match: name, name: _acme-challenge.dyn.example.internal, types: [TXT]}
+```
+
+- Each rule needs a `key` from `bind_tsig_keys`, a `match` (`name`,
+  `subdomain`, `wildcard` or `zonesub`), a `name` unless the match is
+  `zonesub`, and the record `types` the key may change. `action: deny` adds a
+  deny rule. There is no default type list, so each key gets only the types
+  you name; avoid `ANY`, which would let the key change NS records.
+- Updates by IP address (`allow-update`) are not supported, because a forged
+  source address would pass.
+- The role writes the zone file once, from `hosts` and `records`, and never
+  again: BIND keeps updates in a journal and rewrites the file itself. After
+  the first run, change the zone with `nsupdate`, not with the role.
+- The file lives in `bind_dynamic_dir` (`/var/named/dynamic` on EL,
+  `/var/lib/bind/dynamic` on Debian), where named may write. On EL, a
+  different directory needs the `named_cache_t` SELinux type.
+- Reverse zones generated from a dynamic zone are static. To let a key update
+  PTRs, define the reverse zone in `bind_zones` by name, with its own
+  `update_policy`, instead of listing it in `reverse_zones`.
+- Secondaries transfer dynamic zones like any other zone.
+- Create keys with `tsig-keygen -a hmac-sha256 <name>` and store the secret in
+  Ansible Vault.
+
 ## Security defaults
 
 - Zone transfers are refused unless you allow them (`allow_transfer: [none]`).
@@ -198,6 +315,10 @@ or exempt the names your forwarders serve.
 - Every key is attached to the primary or NOTIFY target it belongs to, never
   to the server's own address.
 - Zone names are checked before they are used as file names.
+- Zones sharing a reverse zone must agree on who may query and transfer it.
+- Dynamic updates need a TSIG key and an explicit list of record types; every
+  key a zone refers to must exist in `bind_tsig_keys`.
+- Local zones refuse transfers and updates.
 - `named.conf` and every zone file are validated before they replace the live
   files.
 

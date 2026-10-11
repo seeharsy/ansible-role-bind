@@ -20,6 +20,11 @@ names and structure changed; see the README until the migration guide lands.
 - Per-primary TSIG keys for signed transfers and NOTIFY (GH-170, GH-193, credit: rowanthorpe, roumano).
 - `bind_package_state` (GH-219, credit: jof).
 - `validate: false` on forward zones and `bind_options.validate_except`.
+- `bind_local_zones`: zones every server answers by itself, empty or with records.
+- Per-zone `allow_query` (GH-214, GH-218, credit: pixelrebel, Boschung-Mecatronic-AG-Infrastructure).
+- Per-zone and server-wide `zone-statistics` (GH-206, credit: l8gravely).
+- Response rate limiting through `bind_options.rate_limit` (GH-169, credit: rowanthorpe).
+- Dynamic zones with TSIG `update_policy`, written once and then left to BIND (GH-177, credit: brunobenchimol).
 - Input validation through `meta/argument_specs.yml`.
 - Unit tests for the filter plugin and a Molecule primary/secondary scenario for EL 9/10, Debian 12/13 and Ubuntu 24.04.
 
@@ -40,6 +45,9 @@ names and structure changed; see the README until the migration guide lands.
 - TSIG secrets moved to a `0640` file and are never logged or diffed.
 - The `server` clause listing every key against the host's own address is gone.
 - Zone names are validated before being used as file names.
+- Zones sharing a reverse zone must use the same `allow_query`, so PTRs of a restricted zone are not exposed.
+- Dynamic updates need TSIG and an explicit list of record types; IP-based `allow-update` is not supported.
+- Every key a zone refers to must exist in `bind_tsig_keys`.
 
 ### Removed
 

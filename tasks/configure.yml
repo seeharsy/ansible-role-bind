@@ -6,6 +6,18 @@
     __bind_forward_zones: "{{ bind_zones | bind_zones_with_role(inventory_hostname, 'forward') }}"
     __bind_server_keys: "{{ bind_zones | bind_server_keys(inventory_hostname) }}"
 
+- name: Sort this host's zone files
+  ansible.builtin.set_fact:
+    __bind_dynamic_zones: "{{ __bind_primary_zones | selectattr('update_policy', 'defined') | list }}"
+    # Local zones with records get their own file, like any primary zone.
+    __bind_zone_files: >-
+      {{ __bind_primary_zones | rejectattr('update_policy', 'defined') | list
+         + (bind_local_zones | selectattr('records', 'defined') | selectattr('records')
+            | map('combine', {'name_servers': ['localhost.'], 'hosts': []}) | list) }}
+    __bind_empty_local_zones: >-
+      {{ bind_local_zones | rejectattr('records', 'defined') | list
+         + (bind_local_zones | selectattr('records', 'defined') | rejectattr('records') | list) }}
+
 - name: Create the primary zone directory
   ansible.builtin.file:
     path: "{{ bind_zone_dir }}"
@@ -22,9 +34,9 @@
     mode: "0770"
     owner: "{{ bind_user }}"
     group: "{{ bind_group }}"
-  loop:
-    - "{{ bind_secondary_dir }}"
-    - "{{ bind_dir }}/data"
+  loop: >-
+    {{ [bind_secondary_dir, bind_dir ~ '/data']
+       + ([bind_dynamic_dir] if __bind_dynamic_zones else []) }}
 
 - name: Write TSIG keys
   ansible.builtin.template:
@@ -61,7 +73,7 @@
     mode: "0640"
     setype: named_zone_t
     validate: named-checkzone {{ item.name }} %s
-  loop: "{{ __bind_primary_zones }}"
+  loop: "{{ __bind_zone_files }}"
   loop_control:
     label: "{{ item.name }}"
   vars:
@@ -72,6 +84,44 @@
       {{ __bind_previous.serial
          if __bind_previous.hash | default('') == __bind_hash
          else __bind_previous.serial | default(none) | bind_next_serial(__bind_today) }}
+  notify: Reload BIND
+
+# BIND owns a dynamic zone once it exists: it records updates in a journal
+# and rewrites the file itself, so the role only ever writes the first version.
+- name: Create dynamic zone files that do not exist yet
+  ansible.builtin.template:
+    src: zone.j2
+    dest: "{{ bind_dynamic_dir }}/{{ item.name }}"
+    owner: "{{ bind_user }}"
+    group: "{{ bind_group }}"
+    mode: "0640"
+    force: false
+    validate: named-checkzone {{ item.name }} %s
+  loop: "{{ __bind_dynamic_zones }}"
+  loop_control:
+    label: "{{ item.name }}"
+  vars:
+    __bind_content: "{{ item | bind_zone_content(__bind_zone_defaults) }}"
+    __bind_hash: "{{ __bind_content | bind_content_hash }}"
+    __bind_serial: "{{ none | bind_next_serial(__bind_today) }}"
+  notify: Reload BIND
+
+- name: Write the shared file for local zones without records
+  ansible.builtin.template:
+    src: local-empty.zone.j2
+    dest: "{{ __bind_local_empty_file }}"
+    owner: root
+    group: "{{ bind_group }}"
+    mode: "0640"
+    validate: named-checkzone local.invalid %s
+  when: __bind_empty_local_zones | length > 0
+  notify: Reload BIND
+
+- name: Remove the shared local zone file when nothing uses it
+  ansible.builtin.file:
+    path: "{{ __bind_local_empty_file }}"
+    state: absent
+  when: __bind_empty_local_zones | length == 0
   notify: Reload BIND
 
 - name: Write the main configuration

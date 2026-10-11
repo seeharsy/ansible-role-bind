@@ -8,6 +8,8 @@ __bind_os_zone_dir: /var/named
 # /var/named/slaves is labelled named_cache_t, so named may write there under SELinux.
 __bind_os_secondary_dir: /var/named/slaves
 __bind_os_managed_keys_dir: /var/named/dynamic
+# Dynamic zones need a directory named may write to (named_cache_t).
+__bind_os_dynamic_dir: /var/named/dynamic
 __bind_os_user: named
 __bind_os_group: named
 __bind_os_root_hints: named.ca

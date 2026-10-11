@@ -1,6 +1,6 @@
 ---
-# The primary is authoritative for elsewhere.test, with ACL-based transfers;
-# the secondary reaches it through a forward zone.
+# The primary is authoritative for elsewhere.test, with ACL-based transfers
+# and queries; the secondary reaches it through a forward zone.
 bind_zones: "{{ test_zones + [elsewhere_zone] }}"
 
 elsewhere_zone:
@@ -8,5 +8,6 @@ elsewhere_zone:
   type: primary
   name_servers: [ns1.example.test.]
   allow_transfer: [secondaries]
+  allow_query: [secondaries]
   hosts:
     - {name: target, ip: 192.0.2.77}

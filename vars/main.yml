@@ -11,7 +11,9 @@ __bind_options: >-
       'forward': 'first',
       'dnssec_validation': 'auto',
       'validate_except': [],
-      'query_log': false} | combine(bind_options) }}
+      'query_log': false,
+      'zone_statistics': none,
+      'rate_limit': {}} | combine(bind_options) }}
 
 __bind_zone_defaults: >-
   {{ {'ttl': '1h', 'refresh': '1d', 'retry': '1h', 'expire': '1w',
@@ -22,5 +24,8 @@ __bind_statistics: >-
       'allow': ['127.0.0.1']} | combine(bind_statistics) }}
 
 __bind_keys_file: "{{ bind_conf_dir }}/tsig-keys.conf"
+# Shared by every local zone without records. Kept out of the zone
+# directories so no zone name can collide with it.
+__bind_local_empty_file: "{{ bind_conf_dir }}/local-empty.zone"
 __bind_min_version: "9.18"
 __bind_today: "{{ now(utc=true, fmt='%Y%m%d') }}"

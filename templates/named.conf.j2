@@ -8,6 +8,15 @@
 {% macro yesno(value) -%}
 {{ ('yes' if value else 'no') if value is boolean else value }}
 {%- endmacro %}
+{# Each line ends in a newline, so callers use {{ zone_access(zone) -}}. #}
+{% macro zone_access(zone) %}
+{% if zone.allow_query is defined %}
+  allow-query {{ match_list(zone.allow_query) }};
+{% endif %}
+{% if (zone.statistics | default(none) | bind_zone_statistics) is not none %}
+  zone-statistics {{ zone.statistics | bind_zone_statistics }};
+{% endif %}
+{% endmacro %}
 {% set opt = __bind_options %}
 
 {% for acl in bind_acls %}
@@ -45,6 +54,21 @@ options {
 {% endif %}
 {% if opt.query_log %}
   querylog yes;
+{% endif %}
+{% if opt.zone_statistics | bind_zone_statistics is not none %}
+  zone-statistics {{ opt.zone_statistics | bind_zone_statistics }};
+{% endif %}
+{% if opt.rate_limit %}
+
+  rate-limit {
+{% for key, value in opt.rate_limit.items() %}
+{% if value is string or value is number or value is boolean %}
+    {{ key | replace('_', '-') }} {{ yesno(value) }};
+{% else %}
+    {{ key | replace('_', '-') }} {{ match_list(value) }};
+{% endif %}
+{% endfor %}
+  };
 {% endif %}
 {% if bind_options_extra %}
 
@@ -95,7 +119,11 @@ zone "." IN {
 
 zone "{{ zone.name }}" IN {
   type primary;
+{% if zone.update_policy is defined %}
+  file "{{ bind_dynamic_dir }}/{{ zone.name }}";
+{% else %}
   file "{{ bind_zone_dir }}/{{ zone.name }}";
+{% endif %}
   notify {{ yesno(zone.notify | default(true)) }};
 {% if zone.also_notify is defined %}
   also-notify {{ peer_list(zone.also_notify) }};
@@ -103,7 +131,16 @@ zone "{{ zone.name }}" IN {
 {% if zone.allow_transfer is defined %}
   allow-transfer {{ match_list(zone.allow_transfer) }};
 {% endif %}
+{{ zone_access(zone) -}}
+{% if zone.update_policy is defined %}
+  update-policy {
+{% for rule in zone.update_policy | bind_update_policy %}
+    {{ rule }};
+{% endfor %}
+  };
+{% else %}
   allow-update { none; };
+{% endif %}
 };
 {% endfor %}
 {% for zone in __bind_secondary_zones %}
@@ -115,6 +152,7 @@ zone "{{ zone.name }}" IN {
 {% if zone.allow_transfer is defined %}
   allow-transfer {{ match_list(zone.allow_transfer) }};
 {% endif %}
+{{ zone_access(zone) -}}
 };
 {% endfor %}
 {% for zone in __bind_forward_zones %}
@@ -123,6 +161,22 @@ zone "{{ zone.name }}" IN {
   type forward;
   forward {{ zone.forward | default('only') }};
   forwarders {{ peer_list(zone.forwarders) }};
+};
+{% endfor %}
+{% for zone in bind_local_zones %}
+
+// Local zone: answered by this server alone.
+zone "{{ zone.name }}" IN {
+  type primary;
+{% if zone.records | default([]) %}
+  file "{{ bind_zone_dir }}/{{ zone.name }}";
+{% else %}
+  file "{{ __bind_local_empty_file }}";
+{% endif %}
+  notify no;
+  allow-transfer { none; };
+  allow-update { none; };
+{{ zone_access(zone) -}}
 };
 {% endfor %}
 

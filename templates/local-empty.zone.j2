@@ -1,0 +1,11 @@
+; {{ ansible_managed }}
+; Shared by every local zone without records: nothing inside them exists.
+$TTL {{ __bind_zone_defaults.ttl }}
+@  IN  SOA  localhost. hostmaster.localhost. (
+    1  ; serial
+    {{ __bind_zone_defaults.refresh }}  ; refresh
+    {{ __bind_zone_defaults.retry }}  ; retry
+    {{ __bind_zone_defaults.expire }}  ; expire
+    {{ __bind_zone_defaults.minimum }}  ; negative caching TTL
+)
+@  IN  NS  localhost.

@@ -22,6 +22,8 @@ bind_options: {}
 #  dnssec_validation: auto     # auto | "yes" (needs your own trust-anchors) | "no"
 #  validate_except: []         # names not to validate, e.g. private namespaces
 #  query_log: false
+#  zone_statistics: terse      # full | terse | none; unset keeps BIND's default (terse)
+#  rate_limit: {}              # response rate limiting; off unless set, see README
 
 # Raw named.conf statements appended inside the options block.
 bind_options_extra: ""
@@ -45,6 +47,14 @@ bind_zone_defaults: {}
 # Zones. See README for every key.
 bind_zones: []
 
+# Zones every server answers by itself, e.g. to make lookups for names that
+# can never resolve fail at once. Without records, nothing inside them exists.
+bind_local_zones: []
+#  - name: example.com
+#  - name: sinkhole.example
+#    records:
+#      - {name: "*", type: A, value: 192.0.2.1}
+
 # Statistics channel (HTTP/XML/JSON). Off by default.
 bind_statistics: {}
 #  enabled: false
@@ -66,5 +76,6 @@ bind_conf_dir: "{{ __bind_os_conf_dir }}"
 bind_dir: "{{ __bind_os_dir }}"
 bind_zone_dir: "{{ __bind_os_zone_dir }}"
 bind_secondary_dir: "{{ __bind_os_secondary_dir }}"
+bind_dynamic_dir: "{{ __bind_os_dynamic_dir }}"
 bind_user: "{{ __bind_os_user }}"
 bind_group: "{{ __bind_os_group }}"

@@ -165,3 +165,163 @@
         name: named
         state: started
       delegate_to: "{{ test_primary }}"
+
+- name: Verify local zones
+  hosts: secondary
+  gather_facts: false
+  vars:
+    servers: ["{{ test_ns1_ip }}", "{{ test_ns2_ip }}"]
+  tasks:
+    - name: Query a name inside an empty local zone
+      ansible.builtin.command: dig +norec @{{ item }} anything.blocked.test A
+      loop: "{{ servers }}"
+      register: blocked
+      changed_when: false
+      failed_when: >-
+        'status: NXDOMAIN' not in blocked.stdout
+        or blocked.stdout is not search('flags:[a-z ]* aa[ ;]')
+
+    - name: Query a local zone with records
+      ansible.builtin.command: dig +short +norec @{{ item }} whatever.sink.test A
+      loop: "{{ servers }}"
+      register: sink
+      changed_when: false
+      failed_when: sink.stdout != '192.0.2.250'
+
+    - name: Query a local zone restricted to localhost from another host
+      ansible.builtin.command: dig +norec @{{ test_ns1_ip }} quiet.test SOA
+      register: quiet
+      changed_when: false
+      failed_when: "'status: REFUSED' not in quiet.stdout"
+
+    - name: Query the primary's query-restricted zone from the secondary
+      ansible.builtin.command: dig +short +norec @{{ test_ns1_ip }} target.elsewhere.test A
+      register: allowed
+      changed_when: false
+      failed_when: allowed.stdout != '192.0.2.77'
+
+- name: Verify per-zone query restriction on the primary
+  hosts: primary
+  gather_facts: false
+  tasks:
+    - name: Query the restricted zone from outside its allow_query
+      ansible.builtin.command: dig +norec @127.0.0.1 target.elsewhere.test A
+      register: refused
+      changed_when: false
+      failed_when: "'status: REFUSED' not in refused.stdout"
+
+- name: Verify dynamic updates
+  hosts: secondary
+  gather_facts: false
+  vars:
+    nsupdate_key: "hmac-sha256:ddns:{{ test_ddns_secret }}"
+  tasks:
+    - name: Resolve the seeded record on the secondary
+      ansible.builtin.command: dig +short +norec @127.0.0.1 seed.dyn.test A
+      register: seed
+      changed_when: false
+      failed_when: seed.stdout != '192.0.2.60'
+
+    - name: Add a record with the update key
+      ansible.builtin.command:
+        argv: [nsupdate, -y, "{{ nsupdate_key }}"]
+        stdin: |
+          server {{ test_ns1_ip }}
+          zone dyn.test
+          update add new.dyn.test. 300 A 192.0.2.61
+          send
+      changed_when: true
+      no_log: true
+
+    - name: Wait for the update to reach the secondary
+      ansible.builtin.command: dig +short +norec @127.0.0.1 new.dyn.test A
+      register: updated
+      changed_when: false
+      until: updated.stdout == '192.0.2.61'
+      retries: 15
+      delay: 2
+
+    - name: Try an update without a key
+      ansible.builtin.command:
+        argv: [nsupdate]
+        stdin: |
+          server {{ test_ns1_ip }}
+          zone dyn.test
+          update add rogue.dyn.test. 300 A 192.0.2.66
+          send
+      register: unsigned
+      changed_when: false
+      failed_when: "'REFUSED' not in unsigned.stderr + unsigned.stdout"
+
+    - name: Try a record type the key may not change
+      ansible.builtin.command:
+        argv: [nsupdate, -y, "{{ nsupdate_key }}"]
+        stdin: |
+          server {{ test_ns1_ip }}
+          zone dyn.test
+          update add dyn.test. 300 MX 10 rogue.dyn.test.
+          send
+      register: wrong_type
+      changed_when: false
+      no_log: true
+      failed_when: "'REFUSED' not in wrong_type.stderr + wrong_type.stdout"
+
+- name: Run the role again on the primary
+  hosts: primary
+  roles:
+    - role: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') | basename }}"
+
+- name: Verify the dynamic zone kept its updates
+  hosts: secondary
+  gather_facts: false
+  tasks:
+    - name: Query the updated record on the primary
+      ansible.builtin.command: dig +short +norec @{{ test_ns1_ip }} new.dyn.test A
+      register: kept
+      changed_when: false
+      failed_when: kept.stdout != '192.0.2.61'
+
+- name: Verify statistics and rate limiting
+  hosts: bind
+  gather_facts: false
+  tasks:
+    # Counters start at zero whenever named starts, and the failover check
+    # restarts the primary, so query each zone here first.
+    - name: Query zones with each statistics level
+      ansible.builtin.command: dig +norec @127.0.0.1 {{ item }} SOA
+      loop: [example.test, sink.test, blocked.test, second.test]
+      changed_when: false
+
+    - name: Read zone statistics
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8053/json/v1/zones
+        return_content: true
+      register: stats
+
+    - name: Check only zones with full statistics have query counters
+      ansible.builtin.assert:
+        that:
+          - zones['example.test'].rcodes.QryAuthAns | default(0) | int > 0
+          - zones['sink.test'].rcodes.QryAuthAns | default(0) | int > 0
+          - "'rcodes' not in zones['blocked.test']"
+          - "'second.test' not in zones"
+        fail_msg: "{{ zones | to_json }}"
+        quiet: true
+      vars:
+        zone_list: "{{ stats.json.views._default.zones }}"
+        zones: "{{ dict(zone_list | map(attribute='name') | zip(zone_list)) }}"
+
+    - name: Dump the effective configuration
+      ansible.builtin.command: named-checkconf -p
+      register: effective
+      changed_when: false
+      no_log: true
+
+    - name: Check rate limiting and the global statistics level
+      ansible.builtin.assert:
+        that:
+          - effective.stdout is search('rate-limit\s*\{')
+          - effective.stdout is search('responses-per-second 20;')
+          - effective.stdout is search('log-only yes;')
+          - effective.stdout is search('zone-statistics terse;')
+        quiet: true

@@ -5,8 +5,9 @@ test_ns1_ip: "{{ test_net }}.11"
 test_ns2_ip: "{{ test_net }}.12"
 test_primary: "{{ groups['primary'] | first }}"
 
-# Test fixture only. This is not a real key.
+# Test fixtures only. These are not real keys.
 test_tsig_secret: dGVzdC1vbmx5LW5vdC1hLXJlYWwta2V5LWRvLW5vdC11c2U=
+test_ddns_secret: dGVzdC1vbmx5LWRkbnMta2V5LW5vdC1mb3ItcmVhbC11c2U=
 
 bind_listen:
   ipv4: [any]
@@ -24,11 +25,21 @@ bind_options:
   allow_recursion: [clients]
   dnssec_validation: auto
   query_log: true
+  zone_statistics: terse
+  # Log-only, and every test client is exempt, so it never slows the checks.
+  rate_limit:
+    responses_per_second: 20
+    window: 5
+    exempt_clients: [clients]
+    log_only: true
 
 bind_tsig_keys:
   - name: xfer
     algorithm: hmac-sha256
     secret: "{{ test_tsig_secret }}"
+  - name: ddns
+    algorithm: hmac-sha256
+    secret: "{{ test_ddns_secret }}"
 
 bind_zone_defaults:
   ttl: 5m
@@ -49,6 +60,7 @@ test_zones:
         key: xfer
     name_servers: [ns1, ns2]
     allow_transfer: ["key xfer"]
+    statistics: full
     reverse_zones: [192.0.2.0/24, 198.18.0.0/20, "2001:db8::/64"]
     hosts:
       - {name: ns1, ip: "{{ test_ns1_ip }}"}
@@ -75,9 +87,32 @@ test_zones:
     name_servers: [ns1.example.test., ns2.example.test.]
     hostmaster: dns.admin@example.test
     ttl: 60
+    statistics: none
     allow_transfer: ["key xfer"]
     reverse_zones: [192.0.2.0/24]
     hosts:
       - {name: box, ip: 192.0.2.50}
 
+  # Updated with nsupdate; the role only writes the first version.
+  - name: dyn.test
+    primary: "{{ test_primary }}"
+    primaries:
+      - address: "{{ test_ns1_ip }}"
+        key: xfer
+    name_servers: [ns1.example.test., ns2.example.test.]
+    allow_transfer: ["key xfer"]
+    update_policy:
+      - {key: ddns, match: zonesub, types: [A, TXT]}
+    hosts:
+      - {name: seed, ip: 192.0.2.60}
+
 bind_zones: "{{ test_zones }}"
+
+bind_local_zones:
+  - name: blocked.test
+  - name: sink.test
+    statistics: full
+    records:
+      - {name: "*", type: A, value: 192.0.2.250}
+  - name: quiet.test
+    allow_query: [localhost]
